@@ -1,0 +1,8 @@
+resolver: lts-12.13
+
+packages:
+- .
+- ../nick-chandoke/niclib/
+
+extra-deps:
+- aws-0.20

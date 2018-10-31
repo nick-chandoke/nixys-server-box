@@ -1,0 +1,88 @@
+name:                nixys-server-box
+version:             0.1.0.0
+github:              "nick-chandoke/nixys-server-box"
+license:             BSD3
+author:              "Nicholas Chandoke"
+maintainer:          "nicholas.chandoke@gmail.com"
+copyright:           "2018 Nicholas Chandoke"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/nick-chandoke/nixys-server-box#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- NicLib
+- aws
+- bytestring
+- containers
+- cmark-gfm
+- conduit
+- filepath
+- http-conduit
+- http-types
+- lucid
+- resourcet
+- streaming-commons
+- tagged
+- text
+- transformers
+- wai
+- wai-extra
+- warp
+- warp-tls
+
+library:
+  source-dirs: src
+
+default-extensions:
+- ApplicativeDo
+- DataKinds
+- DefaultSignatures
+- DeriveDataTypeable
+- DeriveFunctor
+- DeriveGeneric
+- FlexibleContexts
+- FlexibleInstances
+- GADTs
+- GeneralizedNewtypeDeriving
+- LambdaCase
+- MonadComprehensions
+- MultiParamTypeClasses
+- MultiWayIf
+- NamedFieldPuns
+- NoMonomorphismRestriction
+- NumDecimals
+- OverloadedLists
+- OverloadedStrings
+- RankNTypes
+- RecordWildCards
+- ScopedTypeVariables
+- StandaloneDeriving
+- TupleSections
+- TypeApplications
+- TypeFamilies
+- TypeOperators
+- TypeSynonymInstances
+- UndecidableInstances
+- ViewPatterns
+
+tests:
+  nixys-server-box-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - nixys-server-box
