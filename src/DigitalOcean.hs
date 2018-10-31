@@ -19,9 +19,6 @@ import qualified Aws
 import qualified Aws.Core as Aws
 import qualified Aws.S3 as S3
 
--- key: ALJDTSZIID37EDHSXZZV
--- secret: NyZx+Y4F6GabbUwQrYbkEIo8NdyK3UfHYRerf2xHa0k
-
 -- | Like HTTP GET.
 getObject :: Aws.Credentials
           -> ByteString -- ^ endpoint (e.g. "nyc3.digitaloceanspaces.com"); (btw, for DigitalOcean Spaces, do *not* use the URL that contains "cdn"! (That will HTTP 403-out.))
