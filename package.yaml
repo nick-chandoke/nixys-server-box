@@ -8,7 +8,6 @@ copyright:           "2018 Nicholas Chandoke"
 
 extra-source-files:
 - README.md
-- ChangeLog.md
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -27,10 +26,13 @@ dependencies:
 - containers
 - cmark-gfm
 - conduit
+- fast-logger
 - filepath
+- hedis
 - http-conduit
 - http-types
 - lucid
+- network
 - resourcet
 - streaming-commons
 - tagged

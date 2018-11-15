@@ -15,12 +15,12 @@
 -- ENDMACRO
 -- @
 -- The language variable is used by prism for syntax highlighting, and is optional.
-module Html.Macros.CodeBox (codeboxA) where
+module ServerBox.Html.Macros.CodeBox (codeboxA) where
 
 import Control.Arrow ((***))
 import Data.List (uncons)
-import Html (Macro)
-import Html.Elements.CodeBox
+import ServerBox.Html (Macro)
+import ServerBox.Html.Elements.CodeBox
 import qualified Data.Text as T'
 
 codeboxA :: Macro (Code 'WholeSeg, Maybe T'.Text)

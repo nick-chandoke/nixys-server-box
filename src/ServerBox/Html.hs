@@ -2,7 +2,7 @@
 
 -- | Semantic HTML for webpages. Rather than be very general for HTML, this Html module encapsulates common HTML data patterns, and creates data types for them, such as radio or checkboxes, lists, etc. Makes markup less verbose, but still structured (as opposed to Markdown, which is non-hierarchical and isn't easily extended.)
 -- If using markdown or some other non-html markup, you should consider whether to use @toHtml@ or @toHtmlRaw@!
-module Html where
+module ServerBox.Html where
 
 import CMarkGFM (commonmarkToHtml, extTable, extAutolink)
 import Control.Applicative
@@ -189,6 +189,11 @@ blocksub m (bool toHtml toHtmlRaw -> conv) = go . T'.lines
 -- @renderTextT $ lift' (fromJust <$> lookupEnv "USER") <> " " <> lift' (fromJust <$> lookupEnv "TERM")@
 lift' :: (Monad m, ToHtml a) => m a -> HtmlT m ()
 lift' = toHtml <=< lift -- originally I wrote: lift' = HtmlT . fmap ((,()) . const . putStringUtf8) :: Functor m => m String -> HtmlT m ()
+
+-- | for some reason, one can't do (with script_ [src_ ⋯] mempty)
+-- use headscript_ instead of script_ in the head_ function for this purpose
+headscript_ :: T'.Text -> Html ()
+headscript_ src = with (makeElement "script") [src_ src] mempty
 
 -- ========== WIP/EXPERIMENTAL STUFF BELOW ==========
 

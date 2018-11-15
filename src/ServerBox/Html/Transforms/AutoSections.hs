@@ -25,17 +25,17 @@
 --     </section>
 -- </section>
 -- @
-module Html.Transforms.AutoSections where
+module ServerBox.Html.Transforms.AutoSections where
 
 import Data.Char (isSpace)
 import Data.Either (isRight)
-import Data.Foldable (fold)
-import Data.Maybe (isJust, fromMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Tree
-import Html (Macro)
+import ServerBox.Html (Macro)
 import Lucid
-import NicLib.NStdLib ((>>>), (>*>), (***))
+import Control.Arrow ((***))
+import NicLib.NStdLib ((>*>))
 import NicLib.Tree (readIndentedGeneral)
 import qualified Data.Text as T'
 

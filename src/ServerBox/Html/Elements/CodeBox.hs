@@ -1,6 +1,6 @@
 -- | Create boxes that hold code or file contents. Syntax highlighting powered by prism.
 -- Example: @WholeCode "sample.txt" "here's one part of the file, like lines 1 through 18" <>: PartCode "here's another part, e.g. lines 100 through 200" <>: PartCode "and yet another part, for instance the last section of an INI file (except that this example is just text, not an ini file ;p)"@
-module Html.Elements.CodeBox
+module ServerBox.Html.Elements.CodeBox
 ( CodeSegment (..)
 , (<>:)
 , Code (..)

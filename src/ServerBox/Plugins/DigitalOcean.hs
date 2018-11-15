@@ -1,13 +1,12 @@
 -- | DigitalOcean things. Usually REST requests.
 -- Note that DigitalOcean tries for interoperability with AWS S3; this module will account for common functionality as necessary.
 -- should I merge into <https://github.com/inzva/DOH>?
-module DigitalOcean
+module ServerBox.Plugins.DigitalOcean
 ( getObject
 , putObject
 , testObject
 ) where
 
-import Control.Monad.Trans.Resource (ResourceT, runResourceT) -- resourcet
 import Network.HTTP.Conduit (newManager, tlsManagerSettings, responseBody) -- http-conduit
 
 import Data.Text (Text) -- text
