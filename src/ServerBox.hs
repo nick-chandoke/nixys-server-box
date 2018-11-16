@@ -48,26 +48,32 @@ import Network.Wai.Middleware.Local (local)
 import qualified Data.ByteString.Char8 as BS'
 import qualified Data.ByteString.Lazy.Char8 as BS
 
-{- | Route a @Request@ to a @Response@. Compose routes with @(<>)@. This is the same as composing @ExceptT (Maybe Response) m Response@'s with @(<|>)@.
+{- | Route a 'Request' to a 'Response'. Compose routes with @(<>)@. This is the same as composing @ExceptT (Maybe Response) m Response@'s with @(\<|\>)@.
+
 Obviously, do @pure resp@ to return a successful response.
+
 @err (Just resp)@ returns a response that is unsuccessful. This is used by functions like @onMethod@ to exit route computations early.
+
 @err Nothing@ will exit the route computation and try the next route.
+
 Thus, a route to pass to @stdwarp@ may be:
+
 @
-import Network.Socket (SockAddr(..)) -- network package
-let route1 req = do
-        onPath "/path1" req -- tries next route if requested path is not "/path1" (returns err Nothing)
-        onMethod methodGet req -- returns 405 if unequal methods (returns err (Just 405 response))
-        pure $ responseLBS ok200 [] "You're on page 1!" -- successful (normal) return!
-    route2 req = do
-        -- return error response if not from a particular IP address
-        when
-            (case remoteHost req of SockAddrInet _ addr -> addr /= tupleToHostAddress (72,181,148,78))
-            (err . Just $ responseLBS forbidden403 [] "Invalid IP address.")
-        pure $ responseFile ok200 [] "/dont/use/static/filepaths.txt" Nothing
-in stdwarp Nothing defaultSettings id $ route1 <> route2
+    import Network.Socket (SockAddr(..)) -- network package
+    let route1 req = do
+            'onPath' "\/path1" req -- tries next route if requested path is not "\/path1" (returns err Nothing)
+            'onMethod' methodGet req -- returns 405 if unequal methods (returns err (Just 405 response))
+            pure $ 'responseLBS' ok200 [] "You're on page 1!" -- successful (normal) return!
+        route2 req = do
+            -- return error response if not from a particular IP address
+            when
+                (case remoteHost req of SockAddrInet _ addr -> addr /= tupleToHostAddress (72,181,148,78))
+                (err . Just $ responseLBS forbidden403 [] "Invalid IP address.")
+            pure $ responseFile ok200 [] "\/dont\/use\/static\/filepaths.txt" Nothing
+    in 'stdwarp' Nothing defaultSettings id $ route1 <> route2
+@
+
 As you can see, this makes arbitrary routes arbitrarily composable, allowing for failure.
-@
 -}
 newtype Route m = Route { rte :: Request -> ExceptT (Maybe Response) m Response }
 
@@ -88,16 +94,23 @@ instance Monad m => Monoid (Route m) where
     mempty = Route $ const (pure mempty)
 
 -- In regards to Response's Semigroup instance, (<> mempty) is used here in routeToApp to guarantee that we don't bottom-out.
--- | Note that, by definition of @Application@, the route you provide here must be in @IO@. Seeing as @routeToApp@ will always be the last step in preparing a route, I suppose that's OK.
+-- Note that, by definition of 'Application', the route you provide here must be in IO. Seeing as routeToApp will always be the last step in preparing a route, I suppose that's OK.
 routeToApp :: Route IO -> Application
 routeToApp r = \req resp ->
     resp . either (fromMaybe mempty) id =<< runExceptT (rte (r <> mempty) $ req)
 
--- | run a warp server on 80 and 443 (or ports given by environment variables PORT and PORT_SECURE), forcing TLS (if you're providing @TLSSettings@.) See @Route@ for an example of running stdwarp.
--- Remember that if you're not using Middleware, @id@ is the dummy Middleware.
+-- | Run a warp server on 80 and 443 (or ports given by environment variables PORT and PORT_SECURE), forcing TLS (if you're providing @TLSSettings@.) See @Route@ for an example of running stdwarp.
+--
+-- Remember that if you're not using 'Middleware', @id@ is the dummy Middleware.
+--
 -- A common Middleware is @gzip def . forceSSL . autohead@
--- NB. You must put forceSSL in yourself, if you want to include it in your middleware for HTTPS connections (I'm not sure if doing so does any good, btw.) I do this because I can't make any assumptions about the order in which you combine your middlewares.
-stdwarp :: Maybe TLSSettings -> Settings -> Middleware -> Route IO -> IO ()
+--
+-- NB. You must put 'forceSSL' in yourself, if you want to include it in your middleware for HTTPS connections (I'm not sure if doing so does any good, btw.) I do this because I can't make any assumptions about the order in which you combine your middlewares.
+stdwarp :: Maybe TLSSettings -- ^ TLSSettings required if you're using HTTPS
+        -> Settings
+        -> Middleware
+        -> Route IO
+        -> IO ()
 stdwarp mtls s mw r = do
     port <- maybe 80 read <$> lookupEnv "PORT"
     sec_port <- maybe 443 read <$> lookupEnv "PORT_SECURE"
@@ -109,9 +122,13 @@ stdwarp mtls s mw r = do
             void . runTLS tls (setPort sec_port s) . addHeaders [("Strict-Transport-Security", "max-age=31536000; includeSubdomains")] . mw $ routeToApp r
 
 -- | Run a Route on localhost on http (allows same-host-only connections, but traffic is still plaintext! Other applications on the host computer can read that traffic!)
+--
 -- You are expected to set the port in the @Settings@ parameter
--- The @Response@ parameter is the response for when a non-local connection attempts to connect to the server. Remember that @mempty@ is a fine dummy @Response@.
-stdwarpLocal :: Response -> Settings -> Middleware -> Route IO -> IO ()
+stdwarpLocal :: Response -- ^ response for when a non-local connection attempts to connect to the server. Remember that @mempty@ is a fine dummy value
+             -> Settings
+             -> Middleware
+             -> Route IO
+             -> IO ()
 stdwarpLocal lr s mw
     = runSettings s
     . local lr
@@ -119,7 +136,7 @@ stdwarpLocal lr s mw
     . mw
     . routeToApp
 
--- | defaultSettings + setTimeout 10, disable proxy protocol, set empty Server header.
+-- | 'defaultSettings' + 'setTimeout' 10. Also disables proxy protocol and sets empty /Server/ header.
 stdSettings :: Settings
 stdSettings =
       setTimeout 10 -- our timeout should be so short anyway! Who waits 10s for a page to load? Long back-end operations should use AJAX, btw.
@@ -131,11 +148,14 @@ stdHeaders :: [(BS'.ByteString, BS'.ByteString)]
 stdHeaders = [ ("X-Frame-Options", "deny")
              ]
 
--- TODO: for some reason the middleware returned here, along with forceSSL in stdwarp's port 80 handler, produces infinite redirect, even when connecting via https on 443, even if there's no forceSSL used on this line.
+-- | Returns a 'Settings' modifier and 'Middleware' that together ...do something.... OK, it uses 'setHost' and 'forceDomain', and I'm not even quite sure what effect that has.
+--
+-- Also, for some reason the middleware returned here, along with 'forceSSL' in 'stdwarp''s port 80 handler, produces infinite redirect, even when connecting via https on 443, even if there's no forceSSL used on this line. So don't use the middleware returned from @setDomain@.
 setDomain :: String -> (Settings -> Settings, Middleware)
 setDomain d = (setHost (Host d), forceDomain $ let bseh = BS'.pack d in bool Nothing (Just bseh) . (==bseh))
 
 -- | Match a method, returning 405 if the desired method is not the one in the request. Probably only use after @onPath@ or using pattern matching to identify a path.
+--
 -- @onMethod methodGet . Route $ \req -> ⋯@ is a very common idiom
 onMethod :: Monad m => Method -> Route m -> Route m
 onMethod m (Route r) = Route $ \req ->
@@ -153,16 +173,17 @@ onPath m (Route r) = Route $ \req ->
 -- TODO: account for 404's here, prob. using bb's JSON API, or a HEAD request. Requires http-conduit.
 -- TODO: maybe not include onMethod GET herein
 -- | Host a static site where pages are predictably named and stored on a 3rd party server, e.g. S3 or BackBlaze
--- e.g. one may serve a static site from backblaze by @staticOn bb@, or S3 by @staticOn s3@
--- Note that you may as well have all links (e.g. href and src attributes point directly to the static resources on the 3rd party server; you may use the endomorphisms for building webpages like this)
+--
+-- e.g. one may serve a static site from backblaze by @staticOn bb@, or S3 by @staticOn s3@.
+--
+-- Note that you may as well have all links. e.g. href and src attributes point directly to the static resources on the 3rd party server; you may use the endomorphisms for building webpages like this.
 staticOn :: Monad m => (BS'.ByteString -> BS'.ByteString) -> Route m
 staticOn f = onMethod methodGet . Route $ \req ->
     let url' = f (BS'.tail $ rawPathInfo req) -- tail b/c we don't want the leading slash
     in do
         pure $ responseLBS movedPermanently301 [(hLocation, url')] ("<!DOCTYPE html><html><head><title>Page Stored on 3rd Party Server</title></head><body>The page you requested is actually located at <a href='" <> BS.fromStrict url' <> "'></a></body></html>")
 
--- TODO: why (around line 110) do I need to call rte? Seems like I should be able to always compose Routes without needing to unwrap them.
--- | load a file from the requested path relative to a root path, on localhost
+-- | Load a file from the requested path relative to a root path, on localhost
 static :: Monad m => String -> Route m
 static root = onMethod methodGet . Route $ \req ->
     let ps = pathInfo req

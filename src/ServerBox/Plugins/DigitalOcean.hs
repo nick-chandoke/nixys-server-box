@@ -20,7 +20,7 @@ import qualified Aws.S3 as S3
 
 -- | Like HTTP GET.
 getObject :: Aws.Credentials
-          -> ByteString -- ^ endpoint (e.g. "nyc3.digitaloceanspaces.com"); (btw, for DigitalOcean Spaces, do *not* use the URL that contains "cdn"! (That will HTTP 403-out.))
+          -> ByteString -- ^ endpoint (e.g. "nyc3.digitaloceanspaces.com"); (btw, for DigitalOcean Spaces, do /not/ use the URL that contains "cdn"! (That will HTTP 403-out.))
           -> Text -- ^ space name
           -> Text -- ^ object name
           -> IO ()

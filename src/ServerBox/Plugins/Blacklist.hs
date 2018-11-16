@@ -1,20 +1,20 @@
 module ServerBox.Plugins.Blacklist (checkBlacklist) where
 
-import ServerBox (Route(Route))
-import Control.Monad.IO.Class (MonadIO, liftIO)
-import qualified Database.Redis as R -- hedis
-import qualified Data.ByteString.Char8 as BS'
-import qualified Data.ByteString.Lazy.Char8 as BS
-import Network.Socket (SockAddr(..)) -- network
-import NicLib.NStdLib (readMaybe)
-import Network.Wai (remoteHost, responseLBS, responseStatus)
-import Data.Bool (bool)
 import Control.Monad (join)
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import Data.Bool (bool)
 import Network.HTTP.Types (tooManyRequests429, internalServerError500) -- http-types
 import Network.HTTP.Types.Status (statusIsClientError)
+import Network.Socket (SockAddr(..)) -- network
+import Network.Wai (remoteHost, responseLBS, responseStatus)
+import NicLib.NStdLib (readMaybe)
+import ServerBox (Route(Route))
+import qualified Data.ByteString.Char8 as BS'
+import qualified Data.ByteString.Lazy.Char8 as BS
+import qualified Database.Redis as R -- hedis
 
 -- | Check a request against a blacklist (stored in Redis;) deny clients who've made failed connections too frequently.
--- Particularly, quickly block addresses for 24 hours who make more than 3 client-error requests per minute.
+-- For example, you can block IP addresses for 24 hours who make more than 3 client-error requests per minute.
 checkBlacklist :: MonadIO m
                => Int -- ^ number of invalid requests before we stop serving that SockAddr entirely
                -> Integer -- ^ length of time (in seconds) to deny the offending user

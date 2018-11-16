@@ -1,4 +1,5 @@
 -- | Transforms headings and subheadings in Markdown into sections and subsections:
+--
 -- @
 -- ## Heading
 -- some text
@@ -8,22 +9,24 @@
 -- ### Subheading 2
 -- ⋯
 -- @
+--
 -- becomes
+--
 -- @
--- <section>
---     <h2>Heading</h2>
+-- \<section\>
+--     \<h2>Heading\</h2\>
 --     some text
 -- 
---     <section>
---         <h3>Subheading</h3>
+--     \<section\>
+--         \<h3\>Subheading\</h3\>
 --         more text
---     </section>
+--     \</section\>
 -- 
---     <section>
---         <h3>Subheading 2</h3>
---         ⋯
---     </section>
--- </section>
+--     \<section\>
+--         \<h3\>Subheading 2\</h3\>
+--         ⋮
+--     \</section\>
+-- \</section\>
 -- @
 module ServerBox.Html.Transforms.AutoSections where
 

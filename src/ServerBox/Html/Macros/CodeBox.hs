@@ -1,4 +1,5 @@
 -- | Create a @CodeBox@ (works only with the @WholeCode@ constructor.) The syntax is
+--
 -- @
 -- \@\@CodeBox
 -- filename | language
@@ -6,7 +7,9 @@
 -- ⋮
 -- ENDMACRO
 -- @
+--
 -- Example:
+--
 -- @
 -- \@\@CodeBox
 -- sample-file.hs | haskell
@@ -14,8 +17,9 @@
 -- ⋮
 -- ENDMACRO
 -- @
+--
 -- The language variable is used by prism for syntax highlighting, and is optional.
-module ServerBox.Html.Macros.CodeBox (codeboxA) where
+module ServerBox.Html.Macros.CodeBox (codebox) where
 
 import Control.Arrow ((***))
 import Data.List (uncons)
@@ -23,8 +27,8 @@ import ServerBox.Html (Macro)
 import ServerBox.Html.Elements.CodeBox
 import qualified Data.Text as T'
 
-codeboxA :: Macro (Code 'WholeSeg, Maybe T'.Text)
-codeboxA convFn ts = case uncons ts of
+codebox :: Macro (Code 'WholeSeg, Maybe T'.Text)
+codebox convFn ts = case uncons ts of
     Nothing -> mempty
     Just (process -> (filename, lang), contents) ->
         convFn (WholeCode filename (T'.unlines contents), if T'.null lang then Nothing else Just lang)

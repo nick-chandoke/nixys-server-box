@@ -5,9 +5,13 @@ import Network.Wai (pathInfo)
 import Network.Wai.Handler.WarpTLS (TLSSettings, tlsSettingsChain) -- warp-tls
 import NicLib.Errors (err)
 
--- | Support for Let's Encrypt's webroot plugin.
--- <https://certbot.eff.org/docs/using.html>
--- e.g. @case webrootOn "myhost.com" of (settings, webRootRoute) -> stdwarp (Just settings) defaultSettings id $ webRootRoute <|> myUsualRoutes@
+-- | Support for <https://certbot.eff.org/docs/using.html Let's Encrypt's webroot plugin>. E.g.
+--
+-- @
+-- case webrootOn "myhost.com" of
+--     (settings, webRootRoute) ->
+--         stdwarp (Just settings) defaultSettings id $ webRootRoute \<|\> myUsualRoutes
+-- @
 webrootOn :: Monad m => String -> (TLSSettings, Route m)
 webrootOn host = (tlsSettingsChain (certDir <> "cert.pem") [certDir <> "fullchain.pem"] (certDir <> "privkey.pem"), webrootAuth)
     where

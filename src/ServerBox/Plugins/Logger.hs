@@ -5,8 +5,6 @@ import Network.HTTP.Types (Status(statusCode))
 import Data.Maybe (fromMaybe)
 
 -- | Create a logger the easy way ;)
--- FormattedTime ~ BS'.ByteString, implements toLogStr
--- LogStr is a black box data type instancing Show, Eq, IsString, Monoid. LogStr's (<>) is O(1).
 mkLogger :: LogType -> IO ((FormattedTime -> LogStr) -> IO (), IO ())
 mkLogger t = flip newTimedFastLogger t =<< newTimeCache simpleTimeFormat
 
