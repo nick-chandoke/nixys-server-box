@@ -86,7 +86,7 @@ instance Monoid Response where
     mempty = responseLBS notImplemented501 mempty mempty
 
 -- One cannot use Data.Monoid.Alt because Kleisli morphisms do not compose under that definition. Also, though we're non-associatively composing Kleisli's, this chaining is done by applying a common object (Request) to all in the sequence, then composing them via (<|>), not (>>=). In short: this composition looks like it can be expressed in terms of common objects, but Monoid is the most suitable object for implementing this manner of composition.
--- | Compose Alternative Kleisli's under @(<|>)@.
+-- | Compose Alternative Kleisli's under @(\<|\>)@.
 instance Monad m => Semigroup (Route m) where
     Route f <> Route g = Route $ \a -> f a <|> g a
 
@@ -156,7 +156,7 @@ setDomain d = (setHost (Host d), forceDomain $ let bseh = BS'.pack d in bool Not
 
 -- | Match a method, returning 405 if the desired method is not the one in the request. Probably only use after @onPath@ or using pattern matching to identify a path.
 --
--- @onMethod methodGet . Route $ \req -> ⋯@ is a very common idiom
+-- @onMethod methodGet . Route $ \\req -> ⋯@ is a very common idiom
 onMethod :: Monad m => Method -> Route m -> Route m
 onMethod m (Route r) = Route $ \req ->
     if requestMethod req /= m then

@@ -3,7 +3,7 @@ allow-newer: true
 
 packages:
 - .
-- ../nick-chandoke/niclib/
+- ../niclib/
 
 extra-deps:
 - aws-0.20

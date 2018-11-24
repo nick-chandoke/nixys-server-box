@@ -1,5 +1,5 @@
 -- | Disqus-like comment module (WIP)
-module ServerBox.Html.Elements.Comments where
+module ServerBox.Markup.Elements.Comments where
 {-
 createBody :: T'.Text -> H.Html
 createBody = H.toHtml . commonmarkToHtml [] [extTable, extAutolink] -- no need for tagfilter extension; we'll sanitize where needed

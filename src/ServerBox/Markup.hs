@@ -3,15 +3,35 @@
 -- TODO: make function to AMPlify code (boilerplate, that is)
 -- | Semantic HTML for webpages. Rather than be very general for HTML, this Html module encapsulates common HTML data patterns, and creates data types for them, such as radio or checkboxes, lists, etc. Makes markup less verbose, but still structured (as opposed to Markdown, which is non-hierarchical and isn't easily extended.)
 --
--- If using Markdown or some other non-html markup, you should consider whether to use @toHtml@ or @toHtmlRaw@!
-module ServerBox.Html where
+-- Remember that this library uses /strict/ 'StateT'!
+--
+-- Throughout this library you'll see the identified @conv@(ersion function); this refers to either @toHtml@ or @toHtmlRaw@.
+module ServerBox.Markup
+( -- * HeadModT
+  Element(..)
+, Head
+, HeadModT(..)
+, HeadMod
+, toDoc
+, putHead
+, mergeHead
+, ph
+  -- * Macros
+, MacroT
+, Macro
+, runMacros
+  -- * Utilities
+, varsub
+, liftRender
+  -- * Extra Tags
+, headscript_
+) where
 
 import CMarkGFM (commonmarkToHtml, extTable, extAutolink)
 import Control.Applicative
 import Control.Monad ((<=<))
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict
-import Data.Bool (bool)
 import Data.Char (isSpace)
 import Data.Foldable
 import Data.Functor.Identity
@@ -23,17 +43,31 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T'
 
-type MacroT m a = (a -> HtmlT m ()) -> [T'.Text] -> HtmlT m ()
-type Macro a = MacroT Identity a
+-- | A /macro/ is a function that a user can specify in markup files. Each macro has its own syntax. Macros transform, modify, or remove markup. See 'ServerBox.Macros' for macros that come bundled with ServerBox.
+type MacroT h m a =
+    (a -> HtmlT m ()) -- ^ conv
+    -> [T'.Text] -- ^ text to process
+    -> HeadModT h m () -- ^ a macro may modify the Head
 
-runTransform :: (a -> HtmlT m ()) -> MacroT m a -> T'.Text -> HtmlT m ()
-runTransform convFn m = m convFn . T'.lines
+type Macro h a = MacroT h Identity a
 
 deriving instance Ord Attribute
 
 -- | Abstract representation of an Html element that belongs in <head>. Usually I expect you'll use @Element Text@; however, I'm leaving it polymorphic so that you can use any @ToHtml a => Element a@, as that's the most general form of element that works with @toDoc@.
 --
 -- @Text@ should work fine considering that, as far as I know, at least, there are no children of <head> that have any more children than merely a single text node.
+--
+-- The purpose of @Element@ is to be put in @Head@, which is a set; you'll be using 'Set.fromList' (explicitly, or implicitly via @-XOverloadedLists@) to input that set, which means that the argument type to @Element@ must be ordered. Thus, even though it isn't present in the definition of @Element@, you'll practically need to use @Ord a => Element a@ rather than mere @Element a@. For example, the following would not compile wihout the explicit type:
+--
+-- @
+-- thing :: (Monad m, Ord h) => 'HeadModT' h m ()
+-- thing = ph (div_ mempty)
+--       *> 'mergeHead' ([ Element "link"   Nothing [href_ $ "some.css", rel_ "stylesheet"]
+--                      , Element "script" Nothing [src_  $ "some.js"]
+--                      ] :: Ord h => Set (Element h))
+-- @
+--
+-- Well, that, /and/ both @mergeHead@ and 'putHead' require @Ord@ constraints as well! Thus there's a need for @Ord h@ in @thing@'s type signature.
 data Element a = Element
     { name :: T'.Text
     , mcontent :: Maybe a
@@ -62,14 +96,26 @@ type Head a = S.Set (Element a)
 --
 -- @
 -- example :: (Ord h, Monad m) => HeadModT h m ()
--- example = HeadModT $ do
---     modify $ S.insert author -- add \<meta author="Tom Smith"\> if said element does not already exist
---     lift $ h2_ "Author: Tom Smith" -- the html to render. Note that I'm using @lift@ rather than @ph@, because this do-block is StateT; the whole block is passed to the HeadModT constructor.
---     where author = Element "meta" Nothing [name_ "author", content_ "Tom Smith"]
+-- example = do
+--
+--     -- add \<meta author="Tom Smith"\> if said element does not already exist
+--     putHead author
+--
+--     -- the html to render
+--     ph $ h2_ "Author: Tom Smith"
+--
+--     where author = Element "meta" Nothing
+--         [name_ "author", content_ "Tom Smith"]
 -- 
--- test = flip (toDoc toHtml) (S.singleton $ Element "title" (Just "Sample Page" :: Maybe T'.Text) []) $ do
---     example
---     ph $ div_ "here's a div!" -- Note I'm using @ph@ here rather than @lift@, because this do-block is HeadModT!
+-- test :: Html ()
+-- test = toDoc toHtml head body
+--     where
+--         -- head is a Set; using -XOverloadedLists
+--         head = [ Element "title" (Just ("Sample Page" :: T'.Text)) []
+--                ]
+--         body = do
+--             example
+--             ph $ div_ "here's a div!"
 -- @
 --
 -- >>> renderText test
@@ -87,21 +133,34 @@ type Head a = S.Set (Element a)
 newtype HeadModT h m a = HeadModT
     { runHeadModT :: StateT (Head h) (HtmlT m) a }
     deriving (Functor, Applicative, Monad)
+
+instance (Semigroup a, Monad m) => Semigroup (HeadModT h m a) where
+    HeadModT a <> HeadModT b = HeadModT $ liftA2 (<>) a b
+
+instance (Monoid a, Monad m) => Monoid (HeadModT h m a) where
+    mempty = HeadModT . lift . pure $ mempty
+
 type HeadMod h = HeadModT h Identity
+
+-- | Put an item into a Head
+putHead :: (Monad m, Ord h) => Element h -> HeadModT h m ()
+putHead = HeadModT . modify . S.insert
+
+-- | Merge a Head with another Head
+mergeHead :: (Monad m, Ord h) => Head h -> HeadModT h m ()
+mergeHead s = HeadModT $ modify (<> s)
 
 -- | Lift 'HtmlT' into 'HeadModT'. Stands for "pure head."
 ph :: Monad m => HtmlT m a -> HeadModT h m a
 ph = HeadModT . lift
 
 -- | The main way to use @HeadModT@; converts HeadModT into \<head\> and \<body\> and puts them under 'doctypehtml_'.
---
--- This being said, if you choose to use @HeadModT@, /all/ of your \<body\> nodes must be @HeadModT@!
 toDoc :: (ToHtml h, Monad m)
-      => (Element h -> HtmlT m ()) -- ^ either @toHtml@ or @toHtmlRaw@. You may think of it as @h -> HtmlT m ()@; @Element h@ is the domain because of a silly typechecking technicality
-      -> HeadModT h m a
-      -> Head h -- ^ the Head to translate into the document's <head> element
+      => (Element h -> HtmlT m ()) -- ^ conv. You may think of it as @h -> HtmlT m ()@; @Element h@ is the domain because of a silly typechecking technicality
+      -> Head h -- ^ corresponds to \<head\>
+      -> HeadModT h m a -- ^ corresponds to \<body\>
       -> HtmlT m ()
-toDoc conv hmt h0 = do
+toDoc conv h0 hmt = do
     head <- lift $ evalHtmlT html_head -- eval the HtmlT m (Head h) to get m (Head h), then rewrap into HtmlT; this way we extract the (Head h) without writing the Html contents here.
     doctypehtml_ $ do {head_ $ foldMap conv head; body_ html}
     where
@@ -111,7 +170,7 @@ toDoc conv hmt h0 = do
 {-
 do
     c <- TIO.readFile ""
-    (if fmap T'.toLower . drop 1 $ T'.lines == ["<!doctype markdown>"] c then commonmarkToHtml [] [extTable, extAutolink] else id) . varsub . blocksub $ c
+    (if fmap T'.toLower . drop 1 $ T'.lines == ["<!doctype markdown>"] c then commonmarkToHtml [] [extTable, extAutolink] else id) . varsub . runMacros $ c
 -}
 
 {- My attempt at making it so that you don't need to use ph so often. WIP.
@@ -140,25 +199,26 @@ instance Monad HtmlLike where
 -- Example:
 --
 -- @
--- TIO.putStrLn =<< varsub
+-- TIO.putStrLn =<< varsub toHtmlRaw
 --     [("are", pure "4"), ("sub me!", pure "6")]
 --     "${are} \\${to NOT} \\$not ${{sub me!} ${sub me!}}"
 -- @
 --
--- --> "4 ${to NOT} $not \<{sub me! not found\> 6}". (The angle brackets are part of the "not found" error message.)
+-- returns @"4 ${to NOT} $not \<{sub me! not found\> 6}"@. (The angle brackets are part of the "not found" error message.)
 --
 -- === Bugs
 --
 -- * The sequence @\\$not@ is transformed into @$not@, even though the backslash /should be kept/ since variable substitution isn't performed unless there are surrounding curly braces! However, I don't know why someone would have said sequence in any document anyway, so I don't care to change the implementation to fix that.
 -- * Also, note that nested substitution is odd. Again, I don't exactly see this as a problem, because who's going to do that anyway? It's just insensible. Still, just in case you're thinking about recursive applications or scraping arbitrary processed text...always good to consider a function totally~
 -- * If you use @varsub@ for what it's designed for, and you don't terribly misalign your braces, then it should serve you; but if you try to break it, you will succeed. It is a total function, in that it terminates for any inputs, still.
-varsub :: M.Map T'.Text (HtmlT IO ()) -- ^ variable substitution map
-       -> Bool -- ^ raw output?
+varsub :: Monad m
+       => M.Map T'.Text (HtmlT m ()) -- ^ variable substitution map
+       -> (T'.Text -> HtmlT m ()) -- ^ conv
        -> T'.Text -- ^ input text
-       -> HtmlT IO () -- ^ output html
-varsub m (bool toHtml toHtmlRaw -> conv) = go
+       -> HtmlT m () -- ^ output html
+varsub m conv = go
     where
-        go :: T'.Text -> HtmlT IO ()
+--      go :: T'.Text -> HtmlT m ()
         go t = case T'.break (\c -> c == '$' || c == '\\') t of
             (a,b) -> conv a <> case T'.uncons b of
                 Nothing -> mempty
@@ -172,7 +232,7 @@ varsub m (bool toHtml toHtmlRaw -> conv) = go
                     _ -> go bs
                 _ -> error "Unreachable" -- c must be \ or $; guaranteed by first T'.break statement. Dummy pattern match here to let GHC know that this is a complete pattern match
             where
-                notFound :: T'.Text -> HtmlT IO ()
+--              notFound :: T'.Text -> HtmlT m ()
                 notFound x = with span_ [style_ "color:red"] (toHtml $ "<Oops: Variable \"" <> x <> "\" not in lookup table!>")
 
 -- | Like 'varsub', except for more complex elements.
@@ -203,7 +263,7 @@ varsub m (bool toHtml toHtmlRaw -> conv) = go
 -- Then we'd process this input by the following code:
 --
 -- @
--- renderTextT (blocksub True m0 input)
+-- renderTextT (runMacros toHtmlRaw m0 input)
 --     where
 --         m0 = M.fromList -- in practice macros will be functions, usually each in their own module - λ's are not maintainable code!
 --             [ ("macro", \\conv ts -> conv . T'.unlines $ fmap (\<\> \"HOHO\") ts) -- add \"HOHO\" to each line
@@ -215,41 +275,42 @@ varsub m (bool toHtml toHtmlRaw -> conv) = go
 --
 -- ==== Notes
 --
--- * The keys in blocksub's map should not begin with the double at-sign!
+-- * The keys in runMacros's map (@m0@ in this example) do not begin with the double at-sign!
 -- * A macro that takes no arguments is equivalent to a varsub variable substitution, except that the varsub may be used inline and the variable name may contain whitespace. Thus there's never a reason to have a nullary macro.
--- * Macro names and the ENDMACRO string are case-sensitive. I recommend using either lowercase-with-hyphens or CamelCase for macro names.
+-- * Macro names /and/ the ENDMACRO string are case-sensitive. I recommend using either lowercase-with-hyphens or CamelCase for macro names.
 -- * Also, note that the substitution begins on the line that the macro begins on; you may prefer a line of white space both before and after your macro definition, or not.
--- * The substitution macros should use either 'toHtml' or 'toHtmlRaw', depending on what's passed to @blocksub@.
-blocksub :: (Monad m)
-         => M.Map T'.Text (MacroT m T'.Text) -- ^ macro map
-         -> Bool -- ^ raw output?
+-- * The substitution macros should use either 'toHtml' or 'toHtmlRaw', depending on what's passed to @runMacros@.
+runMacros :: (Monad m)
+         => M.Map T'.Text (MacroT h m T'.Text) -- ^ macro map
+         -> (T'.Text -> HtmlT m ()) -- ^ @toHtml@ or @toHtmlRaw@
          -> T'.Text -- ^ input text to transform
-         -> HtmlT m () -- ^ output html
-blocksub m (bool toHtml toHtmlRaw -> conv) = go . T'.lines
+         -> HeadModT h m () -- ^ output html
+runMacros m conv = go . T'.lines
     where
---      go :: [T'.Text] -> HtmlT m ()
+--      go :: [T'.Text] -> HeadModT h m ()
         go ts = case break ("@@" `T'.isPrefixOf`) ts of
-            (a, b) -> conv (T'.unlines a) <> case b of
+            (a, b) -> ph (conv $ T'.unlines a) <> case b of
                 [] -> mempty
-                ((T'.takeWhile (not . isSpace) . T'.drop 2 -> macroName):ams) -> let (args, drop 1 -> bms) = span (/="ENDMACRO") ams in maybe (notFound macroName) (\f -> f conv args) (M.lookup macroName m) <> go bms
+                ((T'.takeWhile (not . isSpace) . T'.drop 2 -> macroName):ams) -> case span (/="ENDMACRO") ams of
+                    (args, drop 1 -> bms) -> maybe (notFound macroName) (\f -> f conv args) (M.lookup macroName m) <> go bms
             where
---              notFound :: T'.Text -> HtmlT m ()
-                notFound x = with span_ [style_ "color:red"] (toHtml $ "<Oops: Macro \"" <> x <> "\" not in lookup table!>")
+--              notFound :: T'.Text -> HeadModT m ()
+                notFound x = ph $ with span_ [style_ "color:red"] (toHtml $ "<Oops: Macro \"" <> x <> "\" not in lookup table!>")
 
 -- | Turn a monadic variable into Html, so that it renders (rather than @lift@, which lifts in such a way that does not render)
 --
 -- Example:
 --
--- >>> renderTextT $ lift' (fromJust <$> lookupEnv "USER") <> lift' (pure " ") <> lift' (fromJust <$> lookupEnv "TERM")
+-- >>> renderTextT $ liftRender (fromJust <$> lookupEnv "USER") <> liftRender (pure " ") <> liftRender (fromJust <$> lookupEnv "TERM")
 -- "nic screen" :: IO Text
 --
--- Notice the use of @lift' (pure " ")@; @pure " "@ would be @:: (IsString s, ToHtml s) => HtmlT m s@, which is no good. After all, only HtmlT m () renders or is even a semigroup.
+-- Notice the use of @liftRender (pure " ")@; @pure " "@ would be @:: (IsString s, ToHtml s) => HtmlT m s@, which is no good. After all, only HtmlT m () renders or is even a semigroup.
 --
--- I want to highlight the difference between 'lift' and @lift'@. Given the @IsString@ instance for @HtmlT m ()@, the above example (with OverloadedStrings) becomes:
+-- I want to highlight the difference between 'lift' and @liftRender@. Given the @IsString@ instance for @HtmlT m ()@, the above example (with OverloadedStrings) becomes:
 --
--- @renderTextT $ lift' (fromJust <$> lookupEnv \"USER\") <> " " <> lift' (fromJust <$> lookupEnv \"TERM\")@
-lift' :: (Monad m, ToHtml a) => m a -> HtmlT m ()
-lift' = toHtml <=< lift -- originally I wrote: lift' = HtmlT . fmap ((,()) . const . putStringUtf8) :: Functor m => m String -> HtmlT m ()
+-- @renderTextT $ liftRender (fromJust \<$\> lookupEnv \"USER\") <> " " <> liftRender (fromJust \<$\> lookupEnv \"TERM\")@
+liftRender :: (Monad m, ToHtml a) => m a -> HtmlT m ()
+liftRender = toHtml <=< lift -- originally I'd written: liftRender = HtmlT . fmap ((,()) . const . putStringUtf8) :: Functor m => m String -> HtmlT m ()
 
 -- | for some reason, one can't do @with script_ [src_ ⋯] mempty@
 --

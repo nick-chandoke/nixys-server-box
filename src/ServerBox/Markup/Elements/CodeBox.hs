@@ -7,13 +7,16 @@
 -- <>: PartCode "here's another part, e.g. lines 100 through 200"
 -- <>: PartCode "and yet another part, for instance the last section of an INI file (except that this example is just text, not an ini file ;p)"
 -- @
-module ServerBox.Html.Elements.CodeBox
+module ServerBox.Markup.Elements.CodeBox
 ( CodeSegment (..)
 , (<>:)
 , Code (..)
+, toHeadModT
 ) where
 
+import Data.Set (Set)
 import Lucid
+import ServerBox.Markup (HeadModT, Element(..), ph, mergeHead)
 import qualified Data.Text as T'
 
 -- | For posting code or textfile literals
@@ -49,3 +52,13 @@ q qf (WholeCode (qf -> title) (qf -> contents), m_lang) = with div_ [class_ "sni
 instance ToHtml (Code 'WholeSeg, Maybe T'.Text) where
     toHtml = q toHtml
     toHtmlRaw = q toHtmlRaw
+
+toHeadModT :: (t ~ (Code 'WholeSeg, Maybe T'.Text), Ord h, Monad m)
+           => (T'.Text -> T'.Text) -- ^ root a relative URI to CDN
+           -> (t -> HtmlT m ()) -- ^ conv
+           -> t
+           -> HeadModT h m ()
+toHeadModT root conv a = ph (conv a)
+    *> mergeHead ([ Element "link"   Nothing [href_ $ root "prism.css", rel_ "stylesheet"]
+                 , Element "script" Nothing [src_ $ root "prism.js"]
+                 ] :: Ord h => Set (Element h))
