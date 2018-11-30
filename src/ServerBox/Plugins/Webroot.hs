@@ -16,6 +16,6 @@ webrootOn :: Monad m => String -> (TLSSettings, Route m)
 webrootOn host = (tlsSettingsChain (certDir <> "cert.pem") [certDir <> "fullchain.pem"] (certDir <> "privkey.pem"), webrootAuth)
     where
         certDir = "/etc/letsencrypt/live/" <> host <> "/" -- I'm leaving '/' literals here as pathSeparator because I'm assuming *NIX functionality of webroot; I'm unsure whether webroot has the same setup in Windows
-        webrootAuth = onMethod methodGet . Route $ \req -> case pathInfo req of
+        webrootAuth = onMethod (==methodGet) . Route $ \req -> case pathInfo req of
             (".well-known":"acme-challenge":_) -> (rte $ static certDir) req
             _ -> err mempty

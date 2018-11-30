@@ -23,27 +23,55 @@ module ServerBox.Markup
   -- * Utilities
 , varsub
 , liftRender
+  -- * HTML Endomorphisms
+, lineCode
+, deriveTOC
+  -- * HTML Endo Helper Functions
+, extractContent
+, elementToText
+, elementToTextInner
+, elementToTagHtml
   -- * Extra Tags
 , headscript_
 ) where
 
-import CMarkGFM (commonmarkToHtml, extTable, extAutolink)
+-- cmark-gfm
+-- import CMarkGFM (commonmarkToHtml, extTable, extAutolink)
+
+-- base
 import Control.Applicative
-import Control.Monad ((<=<))
-import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.State.Strict
-import Data.Char (isSpace)
+import Control.Arrow (second, (>>>))
+import Control.Monad ((<=<), (>=>))
+import Data.Char (isSpace, toLower, ord)
+import Data.Ix (inRange)
 import Data.Foldable
 import Data.Functor.Identity
 import Data.Maybe (fromMaybe)
+import Prelude hiding (Applicative(..))
+import Data.Function (fix)
+
+-- transformers
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.State.Strict
+
+-- lucid
 import Lucid
 import Lucid.Base
-import Prelude hiding (Applicative(..))
-import qualified Data.Map.Strict as M
-import qualified Data.Set as S
-import qualified Data.Text as T'
 
--- | A /macro/ is a function that a user can specify in markup files. Each macro has its own syntax. Macros transform, modify, or remove markup. See 'ServerBox.Macros' for macros that come bundled with ServerBox.
+-- containers
+import Data.Sequence (Seq)
+import Data.Tree (foldTree, Tree)
+import qualified Data.Map.Strict as M
+import qualified Data.Sequence as Seq
+import qualified Data.Set as S
+
+-- miscellaneous packages
+import qualified Data.Text as T' -- text
+import Data.Text.Lazy (toStrict)
+import qualified Text.XML as XML -- html-conduit
+import NicLib.Tree (readIndentedGeneral)
+
+-- | A /macro/ is a function that a user can specify in markup files. Each macro has its own syntax. Macros transform, modify, or remove markup. Look in these haddocks' Contents section to see macros bundled with the server box.
 type MacroT h m a =
     (a -> HtmlT m ()) -- ^ conv
     -> [T'.Text] -- ^ text to process
@@ -130,6 +158,8 @@ type Head a = S.Set (Element a)
 --         <div>here&#39;s a div!</div>
 --     </body>
 -- </html>
+--
+-- Note the @do@ notation for subfunction @body@: we do @example *> ph (div_ "here's a div!")@; we could have instead done @ph (div_ "here's a div!") <* example@; the composition of @Html@ and @Head@s is associative, and is accomplished by collecting effects despite the sequence-with-discard functions @*\>@, @\<*@, @\>\>@, and @\<\<@.
 newtype HeadModT h m a = HeadModT
     { runHeadModT :: StateT (Head h) (HtmlT m) a }
     deriving (Functor, Applicative, Monad)
@@ -157,8 +187,8 @@ ph = HeadModT . lift
 -- | The main way to use @HeadModT@; converts HeadModT into \<head\> and \<body\> and puts them under 'doctypehtml_'.
 toDoc :: (ToHtml h, Monad m)
       => (Element h -> HtmlT m ()) -- ^ conv. You may think of it as @h -> HtmlT m ()@; @Element h@ is the domain because of a silly typechecking technicality
-      -> Head h -- ^ corresponds to \<head\>
-      -> HeadModT h m a -- ^ corresponds to \<body\>
+      -> Head h -- ^ the initial \<head\> before the head modding is done
+      -> HeadModT h m a -- ^ the \<body\>
       -> HtmlT m ()
 toDoc conv h0 hmt = do
     head <- lift $ evalHtmlT html_head -- eval the HtmlT m (Head h) to get m (Head h), then rewrap into HtmlT; this way we extract the (Head h) without writing the Html contents here.
@@ -308,9 +338,136 @@ runMacros m conv = go . T'.lines
 --
 -- I want to highlight the difference between 'lift' and @liftRender@. Given the @IsString@ instance for @HtmlT m ()@, the above example (with OverloadedStrings) becomes:
 --
--- @renderTextT $ liftRender (fromJust \<$\> lookupEnv \"USER\") <> " " <> liftRender (fromJust \<$\> lookupEnv \"TERM\")@
+-- @renderTextT $ liftRender (fromJust \<$\> lookupEnv \"USER\") \<\> " " \<\> liftRender (fromJust \<$\> lookupEnv \"TERM\")@
 liftRender :: (Monad m, ToHtml a) => m a -> HtmlT m ()
 liftRender = toHtml <=< lift -- originally I'd written: liftRender = HtmlT . fmap ((,()) . const . putStringUtf8) :: Functor m => m String -> HtmlT m ()
+
+-- HTML Endomorphisms -- TODO: rewrite using Text.XML.Stream.Parse/Conduit
+
+-- | Transform \<pre\>\<code\> blocks into \<table\>s with line numbers.
+-- see 'Text.HTML.DOM' for parsing stringlike's into a @Document@
+lineCode :: Int -- ^ threshold; code must be at least this many lines in order to be numbered
+         -> XML.Document
+         -> Html ()
+lineCode threshold (XML.documentRoot -> doc) = elementToTagHtml doc $ foldMap f (XML.elementNodes doc)
+    where
+        f :: XML.Node -> Html ()
+        f (XML.NodeElement e) = let untransformed = elementToTagHtml e $ foldMap f (XML.elementNodes e) in
+            if XML.elementName e == "pre" then
+                case XML.elementNodes e of
+                    -- filter nodes for content or element;
+                    -- convert elements to their text representations;
+                    -- concatenate all text nodes into one; then g can process it.
+                    [XML.NodeElement code] -> g . foldMap (\case XML.NodeContent t -> t; XML.NodeElement e -> elementToText e; _ -> mempty) $ XML.elementNodes code
+                    _ -> untransformed
+            else untransformed
+        f (XML.NodeContent t) = toHtml t
+        f _ = mempty
+
+        -- used in a foldMap over children nodes of <pre><code>'s
+        g :: T'.Text -> Html ()
+        g t@(T'.lines -> ts) = let {lc = flip with [class_ "linedCode"]; tsl = length ts} in
+            if tsl > 0 && tsl >= threshold then
+                let !lw = T'.length (T'.takeWhile isSpace $ head ts)
+                    -- commonmarkToHtml doesn't remove leading whitespace when converting indented code blocks to HTML.
+                    -- Because we're expecting CSS rule .linedCode td {white-space:pre}, we need to remove that leading whitespace.
+                in lc . table_ . tbody_ . snd $ foldl'
+                    (\(i,acc) v -> (succ i, acc <> (tr_ $ td_ (toHtmlRaw $ show i) <> td_ (toHtmlRaw $ T'.drop lw v))))
+                    (1, mempty)
+                    ts
+            else
+                pre_ . lc . code_ $ toHtmlRaw t
+
+-- | Structure created just for @deriveTOC@
+data TOCEntry = TOCEntry { level :: !Int, ref :: T'.Text, innerHtml :: Html () } deriving Show
+
+-- | Derive a table of contents from @\<h1\>@, @\<h2\>@ etc. elements with an @id@ attribute
+--
+-- Suggested use: @with section_ [id="toc"] $ h2_ "Contents" \<\> snd (deriveTOC True doc)@
+--
+-- Note that if you set @True@ for the 1<sup>st</sup> parameter, heading elements that already have @id@ fields will keep their original respective fields
+--
+-- Setting @True@ vs. @False@ really changes the purpose of @deriveTOC@; if @False@, it's more of a proofreading tool; when @True@, it describes an HTML document.
+--
+-- prop> == deriveAll == @True@ ⇒ fst (deriveTOC _) == mempty
+deriveTOC :: Bool -- ^ derive & add @id@ attribute to @id@-less heading elements, and include them in the TOC?
+          -> (Html () -> Html ()) -- ^ either @ul_@ or @ol_@
+          -> XML.Document
+          -> (Seq T'.Text, Html ())
+deriveTOC deriveAll listWrapper = second postProcess . foldMap f . XML.elementNodes . XML.documentRoot
+    where
+        postProcess :: Seq TOCEntry -> Html ()
+        postProcess = readIndentedGeneral (("Parse error for table of contents entry " <>) . T'.pack . show)
+            (\case TOCEntry {level, ref, innerHtml} -> Right (level, li_ $ with a_ [href_ $ "#" <> ref] innerHtml)) -- this <li><a> will be wrapped in either <ol>, <ul>; see listFold
+                -- always Right b/c we're processing headings only, all of which must have a level
+            >>> foldMap (either (with span_ [class_ "parseError"] . toHtmlRaw) (foldTree listFold)) -- :: Seq (Either Text (Tree (Html ()))) -> Html ()
+            >>> listWrapper -- remember to wrap it all up into one node!
+
+        -- fold a tree of <li> elements into one of listWrapper-wrapped <li> sequences
+        listFold :: Html () -> [Html ()] -> Html ()
+        listFold n lis =
+            case length lis of
+                0 -> n -- 0 means that this is a <li> node without children; therefore don't use listWrapper
+                1 -> n <> head lis
+                _ -> n <> listWrapper (fold lis)
+
+        -- | try to read a tag (i.e. nameLocalName) as a heading, returning its level if so
+        tagAsHeading :: T'.Text -> Maybe Int
+        tagAsHeading = T'.uncons >=> (\(c,cs) -> T'.uncons cs >>= \((flip (-) 48) . ord -> d,_) -> if toLower c == 'h' && inRange (1,6) d then Just d else Nothing)
+
+        f :: XML.Node -> (Seq T'.Text, Seq TOCEntry)
+        f (XML.NodeElement e@(XML.Element {XML.elementName = XML.Name {XML.nameLocalName = nln}, XML.elementAttributes, XML.elementNodes})) =
+            let headingLink idAttr lvl = (mempty,) . Seq.singleton . TOCEntry lvl idAttr . toHtmlRaw $ foldMap elementToTextInner elementNodes
+            in case tagAsHeading nln of
+                Nothing -> foldMap f elementNodes -- not a heading tag; continue *tree* (not list) traversal to search for more heading tags
+                Just lvl -> case elementAttributes M.!? "id" of
+                    Nothing ->
+                        if deriveAll then
+                            headingLink (deriveId e) lvl
+                        else
+                            (Seq.singleton $ elementToText e, mempty)
+                    Just idAttr ->
+                        headingLink idAttr lvl
+        f _ = mempty
+
+        -- derive an @id@ attribute (for a heading) from its inner text content, such that the id has only alphanumerics and dashes
+        deriveId :: XML.Element -> T'.Text
+        deriveId = T'.foldl' tf mempty . T'.strip . extractContent . XML.NodeElement
+            where
+                tf t (toLower -> c) =
+                    if | isSpace c -> T'.snoc t '-'
+                       | inRange ('a','z') c || inRange ('0','9') c || c == '-' -> T'.snoc t c
+                       | otherwise -> t
+
+-- HTML Endomorphism Utilities --
+
+-- | Extract & concat only NodeContent
+extractContent :: XML.Node -> T'.Text
+extractContent (XML.NodeElement (XML.Element {XML.elementNodes})) = foldMap extractContent elementNodes
+extractContent (XML.NodeContent t) = t
+extractContent _ = mempty
+
+-- totally render an element's, including its tag, attributes, and children
+-- used inside rendering children of <pre><code> blocks to ensure that HTML encoded in those blocks is untouched
+elementToText :: XML.Element -> T'.Text
+elementToText e = toStrict . renderText . elementToTagHtml e . toHtmlRaw . foldMap elementToTextInner $ XML.elementNodes e
+
+-- | Like 'elementToText', but don't render the element; render only its inner HTML
+elementToTextInner :: XML.Node -> T'.Text
+elementToTextInner = fix $ \go -> \case
+    XML.NodeElement e -> foldMap go (XML.elementNodes e)
+    XML.NodeContent t -> t
+    XML.NodeComment c -> "<!-- " <> c <> " -->"
+    _ -> mempty
+
+-- render an element's tag with attributes, allowing one to pass-in inner html
+elementToTagHtml :: XML.Element -- ^ element to transform
+                 -> Html () -- ^ inner/child html
+                 -> Html ()
+elementToTagHtml (XML.Element {XML.elementName = XML.Name {XML.nameLocalName = nln}, XML.elementAttributes}) inner =
+    with (makeElement nln inner) $ M.foldlWithKey' (\list attr val -> makeAttribute (XML.nameLocalName attr) val :list) [] elementAttributes
+
+---------------------------------
 
 -- | for some reason, one can't do @with script_ [src_ ⋯] mempty@
 --

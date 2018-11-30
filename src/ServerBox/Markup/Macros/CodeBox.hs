@@ -23,7 +23,7 @@ module ServerBox.Markup.Macros.CodeBox (codebox) where
 
 import Control.Arrow ((***))
 import Data.List (uncons)
-import ServerBox.Markup (Macro, ph)
+import ServerBox.Markup (Macro)
 import ServerBox.Markup.Elements.CodeBox
 import qualified Data.Text as T'
 

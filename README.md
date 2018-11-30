@@ -79,3 +79,5 @@ By the way, if you suggest that WYSIWYG HTML editors are good, I ask if you've b
 ---
 
 As always, if you know of a better method or see a bug, please open an issue on GitHub, or email me!
+
+I understand that one would want HTML functions separate from HTTP ones; if I add one more HTML/markup-munging function (in addition to the already exant ```deriveTOC``` and ```lineCode```,) then I'll split those off into their own markup-manip library.

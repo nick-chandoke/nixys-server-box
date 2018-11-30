@@ -45,6 +45,7 @@ dependencies:
 - wai-extra
 - warp
 - warp-tls
+- xml-conduit
 
 library:
   source-dirs: src
