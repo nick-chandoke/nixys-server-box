@@ -10,7 +10,7 @@ import NicLib.Errors (err)
 -- @
 -- case webrootOn "myhost.com" of
 --     (settings, webRootRoute) ->
---         'stdwarp' (Just settings) defaultSettings id $ webRootRoute \<|\> myUsualRoutes
+--         'stdwarp' (Just settings) defaultSettings id $ webRootRoute \<\> myUsualRoutes
 -- @
 webrootOn :: Monad m => String -> (TLSSettings, Route m)
 webrootOn host = (tlsSettingsChain (certDir <> "cert.pem") [certDir <> "fullchain.pem"] (certDir <> "privkey.pem"), webrootAuth)

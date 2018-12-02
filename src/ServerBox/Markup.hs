@@ -23,12 +23,18 @@ module ServerBox.Markup
   -- * Utilities
 , varsub
 , liftRender
+, parseLTEither
   -- * HTML Endomorphisms
 , lineCode
 , deriveTOC
-  -- * HTML Endo Helper Functions
+  -- * HTML Helper Functions
+, (|<<)
+, (>>|)
+, tag
+, tagtag
 , extractContent
 , elementToText
+, elementToHtml
 , elementToTextInner
 , elementToTagHtml
   -- * Extra Tags
@@ -49,6 +55,8 @@ import Data.Functor.Identity
 import Data.Maybe (fromMaybe)
 import Prelude hiding (Applicative(..))
 import Data.Function (fix)
+import Data.String
+import Control.Exception (SomeException)
 
 -- transformers
 import Control.Monad.Trans.Class (lift)
@@ -68,8 +76,13 @@ import qualified Data.Set as S
 -- miscellaneous packages
 import qualified Data.Text as T' -- text
 import Data.Text.Lazy (toStrict)
-import qualified Text.XML as XML -- html-conduit
 import NicLib.Tree (readIndentedGeneral)
+
+-- html-conduit and dependencies
+import qualified Text.XML as XML
+import Text.HTML.DOM (sinkDocText)
+import Data.Conduit.List (sourceList)
+import Conduit
 
 -- | A /macro/ is a function that a user can specify in markup files. Each macro has its own syntax. Macros transform, modify, or remove markup. Look in these haddocks' Contents section to see macros bundled with the server box.
 type MacroT h m a =
@@ -169,6 +182,9 @@ instance (Semigroup a, Monad m) => Semigroup (HeadModT h m a) where
 
 instance (Monoid a, Monad m) => Monoid (HeadModT h m a) where
     mempty = HeadModT . lift . pure $ mempty
+
+instance Monad m => IsString (HeadModT h m ()) where
+    fromString = HeadModT . lift . fromString
 
 type HeadMod h = HeadModT h Identity
 
@@ -342,41 +358,56 @@ runMacros m conv = go . T'.lines
 liftRender :: (Monad m, ToHtml a) => m a -> HtmlT m ()
 liftRender = toHtml <=< lift -- originally I'd written: liftRender = HtmlT . fmap ((,()) . const . putStringUtf8) :: Functor m => m String -> HtmlT m ()
 
+-- | Like 'Text.HTML.DOM.parseLT' but rather than throwing via @error@, throws in an @Either@
+-- To use with lazy @Text@, do @parseLTEither (toChunks text)@
+--
+-- Strictly speaking, the code returns in any @MonadThrow@, but here it's been reified to @Either@ via the type signature here given to @parseLTEither@
+parseLTEither :: [T'.Text] -> Either SomeException XML.Document
+parseLTEither t = runConduit $ sourceList t .| sinkDocText
+
 -- HTML Endomorphisms -- TODO: rewrite using Text.XML.Stream.Parse/Conduit
 
 -- | Transform \<pre\>\<code\> blocks into \<table\>s with line numbers.
 -- see 'Text.HTML.DOM' for parsing stringlike's into a @Document@
 lineCode :: Int -- ^ threshold; code must be at least this many lines in order to be numbered
          -> XML.Document
-         -> Html ()
-lineCode threshold (XML.documentRoot -> doc) = elementToTagHtml doc $ foldMap f (XML.elementNodes doc)
+         -> XML.Document
+lineCode threshold doc@(XML.documentRoot -> root) =
+    doc {XML.documentRoot = root {XML.elementNodes = f <$> XML.elementNodes root}}
     where
-        f :: XML.Node -> Html ()
-        f (XML.NodeElement e) = let untransformed = elementToTagHtml e $ foldMap f (XML.elementNodes e) in
+        -- f recursively searches through the DOM for <pre><code> blocks, and replaces them with lined tables.
+        -- non-codeblocks are retained unmodified
+        f :: XML.Node -> XML.Node
+        f (XML.NodeElement e) =
             if XML.elementName e == "pre" then
                 case XML.elementNodes e of
                     -- filter nodes for content or element;
                     -- convert elements to their text representations;
-                    -- concatenate all text nodes into one; then g can process it.
-                    [XML.NodeElement code] -> g . foldMap (\case XML.NodeContent t -> t; XML.NodeElement e -> elementToText e; _ -> mempty) $ XML.elementNodes code
+                    -- concatenate all text nodes into one; then codeBlockToLineTable can process it.
+                    [XML.NodeElement code] ->
+                        codeBlockToLineTable
+                        . foldMap (\case XML.NodeContent t -> t; XML.NodeElement e -> elementToText e; _ -> mempty)
+                        $ XML.elementNodes code
                     _ -> untransformed
             else untransformed
-        f (XML.NodeContent t) = toHtml t
-        f _ = mempty
+            where
+                -- continue recursive traversal of DOM in search of <pre><code> blocks
+                untransformed = XML.NodeElement $ e {XML.elementNodes = f <$> XML.elementNodes e}
+        f x = x -- base case
 
-        -- used in a foldMap over children nodes of <pre><code>'s
-        g :: T'.Text -> Html ()
-        g t@(T'.lines -> ts) = let {lc = flip with [class_ "linedCode"]; tsl = length ts} in
+        codeBlockToLineTable :: T'.Text -> XML.Node
+        codeBlockToLineTable t@(T'.lines -> ts) = XML.NodeElement $ let {lc = M.singleton "class" "linedCode"; tsl = length ts} in
             if tsl > 0 && tsl >= threshold then
                 let !lw = T'.length (T'.takeWhile isSpace $ head ts)
-                    -- commonmarkToHtml doesn't remove leading whitespace when converting indented code blocks to HTML.
-                    -- Because we're expecting CSS rule .linedCode td {white-space:pre}, we need to remove that leading whitespace.
-                in lc . table_ . tbody_ . snd $ foldl'
-                    (\(i,acc) v -> (succ i, acc <> (tr_ $ td_ (toHtmlRaw $ show i) <> td_ (toHtmlRaw $ T'.drop lw v))))
-                    (1, mempty)
+                in tagtag "table" lc . tag "tbody" mempty . snd $ foldr
+                    (\v (i,acc) -> (succ i, row (T'.pack $ show i) (T'.drop lw v) : acc))
+                    (1, [])
                     ts
             else
-                pre_ . lc . code_ $ toHtmlRaw t
+                tagtag "pre" mempty $ tag "code" lc [XML.NodeContent t]
+            where
+                td v = XML.NodeElement $ tag "td" mempty [XML.NodeContent v]
+                row numCellVal lineCellVal = XML.NodeElement $ tag "tr" mempty [td numCellVal, td lineCellVal]
 
 -- | Structure created just for @deriveTOC@
 data TOCEntry = TOCEntry { level :: !Int, ref :: T'.Text, innerHtml :: Html () } deriving Show
@@ -389,7 +420,7 @@ data TOCEntry = TOCEntry { level :: !Int, ref :: T'.Text, innerHtml :: Html () }
 --
 -- Setting @True@ vs. @False@ really changes the purpose of @deriveTOC@; if @False@, it's more of a proofreading tool; when @True@, it describes an HTML document.
 --
--- prop> == deriveAll == @True@ ⇒ fst (deriveTOC _) == mempty
+-- prop> deriveAll == True ⇒ fst (deriveTOC _) == mempty
 deriveTOC :: Bool -- ^ derive & add @id@ attribute to @id@-less heading elements, and include them in the TOC?
           -> (Html () -> Html ()) -- ^ either @ul_@ or @ol_@
           -> XML.Document
@@ -439,7 +470,32 @@ deriveTOC deriveAll listWrapper = second postProcess . foldMap f . XML.elementNo
                        | inRange ('a','z') c || inRange ('0','9') c || c == '-' -> T'.snoc t c
                        | otherwise -> t
 
--- HTML Endomorphism Utilities --
+-- HTML Helper Functions --
+
+tag :: T'.Text -- ^ tag name, /e.g./ "tr"
+    -> M.Map XML.Name T'.Text -> [XML.Node] -> XML.Element
+tag t = XML.Element (XML.Name t Nothing Nothing)
+
+-- | Make a tag an only child of another tag
+tagtag :: T'.Text -- ^ parent tag
+       -> M.Map XML.Name T'.Text -- ^ attributes
+       -> XML.Element -- ^ only child
+       -> XML.Element -- ^ parent with child
+tagtag t m c = tag t m [XML.NodeElement c]
+
+infixr 5 |<<
+-- | Nest an element inside another
+(|<<) :: XML.Element -- ^ parent
+      -> XML.Element -- ^ child
+      -> XML.Element
+p |<< c = p {XML.elementNodes = XML.elementNodes p <> [XML.NodeElement c]}
+
+infixr 5 >>|
+-- | Nest an element inside another
+(>>|) :: XML.Element -- ^ child
+      -> XML.Element -- ^ parent
+      -> XML.Element
+(>>|) = flip (|<<)
 
 -- | Extract & concat only NodeContent
 extractContent :: XML.Node -> T'.Text
@@ -447,10 +503,12 @@ extractContent (XML.NodeElement (XML.Element {XML.elementNodes})) = foldMap extr
 extractContent (XML.NodeContent t) = t
 extractContent _ = mempty
 
--- totally render an element's, including its tag, attributes, and children
--- used inside rendering children of <pre><code> blocks to ensure that HTML encoded in those blocks is untouched
+-- | Render an element
 elementToText :: XML.Element -> T'.Text
-elementToText e = toStrict . renderText . elementToTagHtml e . toHtmlRaw . foldMap elementToTextInner $ XML.elementNodes e
+elementToText = toStrict . renderText . elementToHtml
+
+elementToHtml :: XML.Element -> Html ()
+elementToHtml e = elementToTagHtml e . toHtmlRaw . foldMap elementToTextInner $ XML.elementNodes e
 
 -- | Like 'elementToText', but don't render the element; render only its inner HTML
 elementToTextInner :: XML.Node -> T'.Text
@@ -460,7 +518,7 @@ elementToTextInner = fix $ \go -> \case
     XML.NodeComment c -> "<!-- " <> c <> " -->"
     _ -> mempty
 
--- render an element's tag with attributes, allowing one to pass-in inner html
+-- | Render an element's tag with attributes, allowing one to pass-in inner html
 elementToTagHtml :: XML.Element -- ^ element to transform
                  -> Html () -- ^ inner/child html
                  -> Html ()
@@ -469,9 +527,9 @@ elementToTagHtml (XML.Element {XML.elementName = XML.Name {XML.nameLocalName = n
 
 ---------------------------------
 
--- | for some reason, one can't do @with script_ [src_ ⋯] mempty@
+-- | For some reason, one can't do @with script_ [src_ ⋯] mempty@
 --
--- use @headscript_@ instead of 'script_' in the 'head_' function for this purpose
+-- Use @headscript_@ instead of 'script_' in the 'head_' function for this purpose
 headscript_ :: T'.Text -> Html ()
 headscript_ src = with (makeElement "script") [src_ src] mempty
 

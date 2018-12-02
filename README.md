@@ -60,6 +60,8 @@ which would later be converted from Markdown into HTML.
 
 Variable substitutions and macros are specified in markup, not in Haskell code.
 
+**NB**. Macro names given in the haddocks (/e.g./ @@AutoSections)are just examples; you must specify the actual name in calls to the ```Map``` argument of ```runMacros```.
+
 ## Design Concepts
 
 ### Semantics, not Magazines

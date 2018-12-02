@@ -30,6 +30,7 @@ dependencies:
 - fast-logger
 - filepath
 - hedis
+- html-conduit
 - http-conduit
 - http-client
 - http-client-tls

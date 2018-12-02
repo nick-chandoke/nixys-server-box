@@ -1,6 +1,7 @@
 -- | Transforms headings and subheadings in Markdown into sections and subsections:
 --
 -- @
+-- @@AutoSections
 -- ## Heading
 -- some text
 -- ### Subheading
