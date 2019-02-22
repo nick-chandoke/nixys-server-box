@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 
+-- TODO: consider adding Arrow instance to Route? This would be for prettier-looking route blocks than what semigroup provides.
 -- TODO: learn how to use HTTP/2-specific functions in Network.Wai.Handler.Warp? To what extent are these used automatically or are not so useful for me?
 -- | Run a warp server, and routing types & methods
 module ServerBox
@@ -28,7 +29,7 @@ import System.Environment (lookupEnv)
 -- import qualified Network.HTTP.Req as Req
 
 -- NicLib
-import NicLib.Errors (err)
+import NicLib.AccumShort (short)
 
 -- text
 import qualified Data.Text as T'
@@ -70,7 +71,7 @@ Thus, a route to pass to @stdwarp@ may be:
         route2 = Route $ \\req -\> do
             -- return error response if not from a particular IP address
             when
-                (case remoteHost req of SockAddrInet _ addr -> addr /= tupleToHostAddress (72,181,148,78))
+                (case remoteHost req of SockAddrInet _ addr -> addr \/= tupleToHostAddress (72,181,148,78))
                 (err . Just $ responseLBS forbidden403 [] "Invalid IP address.")
             pure $ responseFile ok200 [] "\/dont\/use\/static\/filepaths.txt" Nothing
     in 'stdwarp' Nothing defaultSettings id $ route1 \<\> route2
@@ -136,7 +137,7 @@ stdwarpLocal lr s mw
     . mw
     . routeToApp
 
--- | 'defaultSettings' + 'setTimeout' 10. Also disables proxy protocol and sets empty /Server/ header.
+-- | 'defaultSettings' + 'setTimeout' 10. Also disables proxy protocol and sets empty @Server@ header.
 stdSettings :: Settings
 stdSettings =
       setTimeout 10 -- our timeout should be so short anyway! Who waits 10s for a page to load? Long back-end operations should use AJAX, btw.
@@ -161,25 +162,25 @@ setDomain d = (setHost (Host d), forceDomain $ let bseh = BS'.pack d in bool Not
 onMethod :: Monad m => (Method -> Bool) -> Route m -> Route m
 onMethod m (Route r) = Route $ \req -> let meth = requestMethod req in
     if m meth then r req
-    else err . Just $ responseLBS methodNotAllowed405 [] ("This route does not accept the HTTP " <> BS.fromStrict meth <> " method.")
+    else short . Just $ responseLBS methodNotAllowed405 [] ("This route does not accept the HTTP " <> BS.fromStrict meth <> " method.")
 
 -- | Modify a route so that it tries its successor route if a path predicate fails.
 --
--- @onPath (=="/") . staticOn (const "https://mybucket.somecdn.com/html/home.html")@ is a common idiom for matching the homepage.
--- (By the way, if you redirect home, remember to select either "/" or "/home" as the canonical version.)
+-- @onPath (=="\/") . staticOn (const "https:\/\/mybucket.somecdn.com\/html\/home.html")@ is a common idiom for matching the homepage.
+-- (By the way, if you redirect home, remember to select either "\/" or "\/home" as the canonical version.)
 --
 -- Note that the path is never null; it always either begins with, or entirely consists of, a forward-slash
 onPath :: Monad m => (BS'.ByteString -> Bool) -> Route m -> Route m
-onPath m (Route r) = Route $ \req -> if m (rawPathInfo req) then r req else err Nothing
+onPath m (Route r) = Route $ \req -> if m (rawPathInfo req) then r req else short Nothing
 
 -- | Host a static site where pages are predictably named and stored on a 3rd party server, e.g. S3 or BackBlaze, or some CDN. I'm going to assume it's a CDN. So, @staticOn@ 301-redirects to the "translated" location on the CDN.
 --
 -- For example, to serve on an AWS S3-compatible CDN, one may do
--- @let cdn = (\p -\> "https://mybucket.somecdn.com" \<\> p) in staticOn@, which, would redirect, /e.g./ "//mysite.com/path1" to "https://mybucket.somecdn.com/path1". *Note that the static URL does not end with a slash.* This doesn't always need to be the case, but you must always consider that the path being transformed (the @p@ lambda variable, in this example) /does/ begin with a leading slash!
+-- @let cdn = (\p -\> "https:\/\/mybucket.somecdn.com" \<\> p) in staticOn@, which, would redirect, /e.g./ "\/\/mysite.com\/path1" to "https:\/\/mybucket.somecdn.com\/path1". *Note that the static URL does not end with a slash.* This doesn't always need to be the case, but you must always consider that the path being transformed (the @p@ lambda variable, in this example) /does/ begin with a leading slash!
 --
 -- === Suggestions
 --
--- * have all links &ndash; /e.g./ @href@ and @src@ attributes &ndash; point directly to the static resources on the CDN
+-- * have all links – /e.g./ @href@ and @src@ attributes – point directly to the static resources on the CDN
 -- * you'll almost alway want to use with @onMethod (==methodGet)@
 -- * if you really are using a CDN to host all your (non-dynamically-generated) webpages (like you /should/,) then be sure to <https://support.google.com/webmasters/answer/139394?hl=en let search engines know that the pages are really yours>, rather than you just linking to someone else's page! Also, set access to /Public/ in your DigitalOcean spaces dashboard!
 staticOn :: (BS'.ByteString -> BS'.ByteString)

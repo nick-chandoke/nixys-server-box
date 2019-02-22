@@ -77,7 +77,7 @@ data DOConfig = DOConfig
 --
 -- As always, do /not/ put your secrets in plantext in the executable! They can be read easily via @strings(1)@; this is what an awful idea looks like:
 --
--- @mkDOConfig Nothing "JL0IED8TOFDMCQSO1402" "dC2kNFD2y2pIeeQtKhZkdMUaW341arsjBImtDTrwy/s" "nyc3.digitaloceanspaces.com"
+-- @mkDOConfig Nothing "JL0IED8TOFDMCQSO1402" "dC2kNFD2y2pIeeQtKhZkdMUaW341arsjBImtDTrwy/s" "nyc3.digitaloceanspaces.com"@
 --
 -- Even if you don't know Docker,...find /something/ else besides plaintext! Storing in envvars isn't acceptable, either!
 mkDOConfig :: Maybe Aws.Logger -- ^ some or no logging

@@ -1,5 +1,5 @@
 name:                nixys-server-box
-version:             0.1.0.0
+version:             0.1.1.0
 github:              "nick-chandoke/nixys-server-box"
 license:             BSD3
 author:              "Nicholas Chandoke"
@@ -35,6 +35,7 @@ dependencies:
 - http-client
 - http-client-tls
 - http-types
+- hxt
 - lucid
 - network
 - resourcet
@@ -46,13 +47,13 @@ dependencies:
 - wai-extra
 - warp
 - warp-tls
-- xml-conduit
 
 library:
   source-dirs: src
 
 default-extensions:
 - ApplicativeDo
+- Arrows
 - DataKinds
 - DefaultSignatures
 - DeriveDataTypeable

@@ -36,7 +36,7 @@ import Data.Either (isRight)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Tree
-import ServerBox.Markup (Macro, ph)
+import ServerBox.Markup (Macro, liftHtml)
 import Lucid
 import Control.Arrow ((***))
 import NicLib.NStdLib ((>*>), cT)
@@ -44,7 +44,7 @@ import NicLib.Tree (readIndentedGeneral)
 import qualified Data.Text as T'
 
 autoSections :: Macro h T'.Text
-autoSections convFn = (foldMap convFn *** foldMap (either convFn tc) . readIndentedGeneral id readHeading >*> cT ph (<>)) . break (isRight . readHeading)
+autoSections convFn = (foldMap convFn *** foldMap (either convFn tc) . readIndentedGeneral id readHeading >*> cT liftHtml (<>)) . break (isRight . readHeading)
     where
         readHeading :: Text -> Either (Html () -> Html ()) (Int, Html () -> Html ()) -- remember that, for readIndentedGeneral, readHeading needs to be :: full -> Either a (i, a)
         readHeading t = fromMaybe (Left (<> convFn t)) $ do -- this do block is :: Maybe (Either (Html () -> Html ()) (Int, Html () -> Html ()))

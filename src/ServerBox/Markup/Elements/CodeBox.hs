@@ -16,7 +16,7 @@ module ServerBox.Markup.Elements.CodeBox
 
 import Data.Set (Set)
 import Lucid
-import ServerBox.Markup (HeadModT, Element(..), ph, mergeHead)
+import ServerBox.Markup (HeadModT, Element(..), liftHtml, mergeHead)
 import qualified Data.Text as T'
 
 -- | For posting code or textfile literals
@@ -58,7 +58,7 @@ toHeadModT :: (t ~ (Code 'WholeSeg, Maybe T'.Text), Ord h, Monad m)
            -> (t -> HtmlT m ()) -- ^ conv
            -> t
            -> HeadModT h m ()
-toHeadModT root conv a = ph (conv a)
+toHeadModT root conv a = liftHtml (conv a)
     *> mergeHead ([ Element "link"   Nothing [href_ $ root "prism.css", rel_ "stylesheet"]
                  , Element "script" Nothing [src_ $ root "prism.js"]
                  ] :: Ord h => Set (Element h))
