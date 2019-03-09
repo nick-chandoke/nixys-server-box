@@ -1,68 +1,39 @@
-# nixys-server-box
+# Nixy's Server Box
 
-## Overview
+What is: few things that warp didn't provide that I needed for making websites and website servers.
 
-**Purpose:** be a template/framework for quickly & easily defining safe, fast, flexible, custom SaaS HTTP servers built on a small set of common functions. It's aimed at anyone who wants to quickly throw-together a server with custom routing and application logic without worrying about details. nixys-server-box documentation is verbose enough to make it both tutorial and reference, as an introduction to common web things, so that one can get started quickly, hacking and learning when they wish. It's not the best that a server can be, but it should good enough for many. It's aimed at common use cases, namely serving markup from a CDN, constrained to some application logic.
+Features:
+
+* Routing
+* Markup abstractions
+    * Inline functions/markup transforms
+    * ```\<head\>``` is a function of ```\<body\>```
+    * Variable substitution
+* Let's Encrypt's Webroot plugin route
+* Easy logger interface
+* Easy AWS S3 bucket/DigitalOcean spaces interface
+
+## *Another* Server Library? C'mon.
+
+Yeah, sorry. It *is* minimalist, at least. In fact, that's its premier feature: it's small &amp; simple, built atop common mathematical constructs, using plain-ol' Haskell language rather than a fancy-shmancy eDSL. I want to work close to the server, close to the HTTP implementation itself. This library is just the few functions I needed to write in order to make warp decent for my minimalist website-server needs.
+
+For the same reason that people like *e.g.* Servant or Scotty&mdash;their pretty-print safe RESTful API-friendly syntaxes&mdash;I dislike them. I don't want to be bothered with transformer stacks or special syntaxes. You don't need to take any time to figure-out how to fit a ```Conduit``` ```Consumer``` into the server box; you just stick it in and maybe wrap it with a call to ```pure```.
+
+I think it's good to remember that *HTTP servers are simple already*; when we try to simplify them more, we just add fluff, thus making them more complicated. The server box makes no attempts to accomodate your needs beyond responding to HTTP requests.
+
+It is, as is all my code, not about being easy as much as being general, elegant, composed of common powerful mathematical objects.
+
+So yeah, the server box certainly isn't for everyone. It's much more about staying productive at a low-level, rather than an easy-to-use, pretty framework that fits together like puzzle pieces. In fact, it encourages considering what all an HTTP server *can* be (as long as it conforms to the spec) rather than what it *should* be. Go nuts and live dangerously.
 
 ## Not the Best
 
-I have no problem admitting that I began learning Haskell, basic server design, and HTTP, in February 2017, so I'm myself a newbie. Thus I do things naïvely. This is a double-edged sword: it means that I have the perspective of a newbie, and so I can design newbie-friendly frameworks. Of course, on the other hand, my code isn't as complete, safe, nor optimized as many others'. For example, one of the first things I did in creating a server framework was supporting HTTPS; I turned to *Let's Encrypt*'s *webroot* plugin. I found a blog article showing how to use it in Haskell with warp, and it worked! Yay. What more do I need? It works. The code is just a few lines.
+I'm no webdev master; thus I do things naïvely. This is a double-edged sword: it means that I have the perspective of a newbie, and so I can design newbie-friendly frameworks. Of course, on the other hand, my code isn't as complete, safe, nor optimized as many others'. For example, one of the first things I did in creating a server framework was supporting HTTPS; I turned to *Let's Encrypt*'s *webroot* plugin. I found a blog article showing how to use it in Haskell with warp, and it worked! Yay. What more do I need? It works. The code is just a few lines.
 
-But later I found that snoyberg [already has a Let's Encrypt warp plugin](https://github.com/snoyberg/warp-letsencrypt). I just read the code. I'm sure it's good code, but I don't understand its complexities. I didn't even consider that someone had already tackled that problem, because I didn't think there was that much code to be written for it! Therefore I assume that I don't really know what I'm doing. What I do know is that, as far as I can tell, this framework does everything I want how I want. I figure others may use it and have the same experience.
+But later I found that snoyberg [already has a Let's Encrypt warp plugin](https://github.com/snoyberg/warp-letsencrypt). I just read the code. I'm sure it's good code, but I don't understand its complexities. I didn't even consider that someone had released code for that, because I didn't think there was that much code to be written for it! (See [my implementation of webroot](https://github.com/nick-chandoke/nixys-server-box/blob/master/src/ServerBox/Plugins/Webroot.hs) for contrast.) Therefore I assume that I must not really know what I'm doing. What I do know is that, as far as I can tell, this framework does everything I want how I want. I figure others may use it and have the same experience.
 
-### An Unfinished Playground
+## Markup Design Concepts
 
-Aside from being a generally reliable framework, this is also an idea testing ground. My goal here is simply "to elegantly, simply, neatly, succintly, and safely express ideas as markup." Some such ideas are:
-
-#### Unimplemented &ndash; Just Considering
-
-* translating semantic documents (*e.g.* spreadsheets) into markup combinatorally
-
-#### Implemented
-
-* agumenting or generalizing Markdown and HTML, *e.g.* via use of macros
-* binding \<head\> imports with HTML (*e.g.* putting at least one ```CodeBox``` in your markup guarantees that exactly one [prism](https://prismjs.com/) import is in \<head\>)
-* macros and variable substitution (see the following section)
-
-##### Macros & Variable Substitution
-
-* A *variable substitution* replaces a variable name by its corresponding value. For instance, ```${today}``` → ```10/23/2018```
-* A *macro* inserts markup into a markup document, such as inserting a <form> template into a Markdown document. Each macro has its own syntax; see the Haddock documentation for general and specific macro syntax.
-
-<pre><code>
-    ## Heading
-    some text
-    ### Subheading
-    more text
-
-    ### Subheading 2
-    ⋯
-</code></pre>
-
-becomes
-
-    <section>
-        ## Heading
-        some text
-
-        <section>
-            ### Subheading
-            more text
-        </section>
-
-        <section>
-            ### Subheading 2
-            ⋯
-        </section>
-    </section>
-
-which would later be converted from Markdown into HTML.
-
-Variable substitutions and macros are specified in markup, not in Haskell code.
-
-**NB**. Macro names given in the haddocks (/e.g./ @@AutoSections)are just examples; you must specify the actual name in calls to the ```Map``` argument of ```runMacros```.
-
-## Design Concepts
+tl;dr: WYSIWYG bad, WYSIWYM (What You See Is What You Mean) good. Prefer TEX over ODT. Use graph editors for graphs, table editors for tables, etc. Let them be converted to HTML automatically only.
 
 ### Semantics, not Magazines
 
@@ -74,12 +45,6 @@ Secondly, there are only so many common structures: mostly tables, lists, sets, 
 
 Have you ever used graphviz? The way it works to automatically elegantly arrange graphs is really cool; it uses a concept of potential energy. Anyway, why don't we automatically arrange HTML, too? There aren't many HTML designs: we have list-based things &ndash; navbars, \<ol\>, \<ul\> &ndash;  either vertical or horizontal, hidden or not, on the top, left, right, or bottom of a screen. We have main content, a header and a footer. And of course, some common markdown-supported elements like \<p\>. And of course, we can arbitrarily compose/nest sets or sequences of all these elements. That's the grand majority of webpage content. Why are we needing to layout this stuff by-hand? Let's be honest, folks: we're all basically doing the same webpage design. That's just a testament to the fact that there exists a design that maximizes readability & engagement together. Web design isn't an art project; it can (and *should*) be calculated, given a set of objects and constraints. Semantic web elements, and accessibility, should come built-in, for starters.
 
-**tl;dr** web design is a science at least as much as it is an art.
+**Web design is a science at least as much as it is an art.**
 
 By the way, if you suggest that WYSIWYG HTML editors are good, I ask if you've been to the [CSS Zen Garden](http://csszengarden.com/)?
-
----
-
-As always, if you know of a better method or see a bug, please open an issue on GitHub, or email me!
-
-I understand that one would want HTML functions separate from HTTP ones; if I add one more HTML/markup-munging function (in addition to the already exant ```deriveTOC``` and ```lineCode```,) then I'll split those off into their own markup-manip library.

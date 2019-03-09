@@ -1,7 +1,7 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 -- TODO: consider adding Arrow instance to Route? This would be for prettier-looking route blocks than what semigroup provides.
--- TODO: learn how to use HTTP/2-specific functions in Network.Wai.Handler.Warp? To what extent are these used automatically or are not so useful for me?
+-- TODO: learn how to use HTTP/2-specific functions in Network.Wai.Handler.Warp? To what extent are these used automatically or are not so useful?
 -- | Run a warp server, and routing types & methods
 module ServerBox
 ( Route(..)
@@ -28,14 +28,9 @@ import System.Environment (lookupEnv)
 -- req
 -- import qualified Network.HTTP.Req as Req
 
--- NicLib
-import NicLib.AccumShort (short)
-
--- text
-import qualified Data.Text as T'
-
+import Control.Monad.Trans.Except (ExceptT(..), runExceptT) -- transformers
+import qualified Data.Text as T' -- text
 import System.FilePath (pathSeparator) -- filepath
-import Control.Monad.Trans.Except (ExceptT, runExceptT) -- transformers
 import Data.Semigroup (Semigroup, (<>)) -- semigroups
 import Data.Streaming.Network.Internal (HostPreference (Host)) -- streaming-commons
 import Network.HTTP.Types (Method, hLocation, methodNotAllowed405, movedPermanently301, methodGet, ok200, noContent204, notImplemented501) -- http-types
@@ -51,6 +46,8 @@ import Network.Wai.Middleware.Local (local)
 
 import qualified Data.ByteString.Char8 as BS'
 import qualified Data.ByteString.Lazy.Char8 as BS
+
+short = ExceptT . pure . Left
 
 {- | Route a 'Request' to a 'Response'. Compose routes with @(<>)@. This is the same as composing @ExceptT (Maybe Response) m Response@'s with @(\<|\>)@.
 
@@ -133,7 +130,7 @@ stdwarpLocal :: Response -- ^ response for when a non-local connection attempts 
 stdwarpLocal lr s mw
     = runSettings s
     . local lr
-    . addHeaders [("Access-Control-Allow-Origin", "null")] -- no-hassle AJAX (I recommend PureScript's Affjax module)
+    . addHeaders [("Access-Control-Allow-Origin", "null")] -- no-hassle AJAX
     . mw
     . routeToApp
 

@@ -1,10 +1,10 @@
 name:                nixys-server-box
-version:             0.1.1.0
+version:             0.1.2.0
 github:              "nick-chandoke/nixys-server-box"
 license:             BSD3
 author:              "Nicholas Chandoke"
 maintainer:          "nicholas.chandoke@gmail.com"
-copyright:           "2018 Nicholas Chandoke"
+copyright:           "2018-2019 Nicholas Chandoke"
 
 extra-source-files:
 - README.md
@@ -20,7 +20,6 @@ description:         Please see the README on GitHub at <https://github.com/nick
 
 dependencies:
 - base >= 4.7 && < 5
-- NicLib
 - aws
 - binary
 - bytestring

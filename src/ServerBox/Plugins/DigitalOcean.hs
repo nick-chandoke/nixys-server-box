@@ -29,6 +29,7 @@ module ServerBox.Plugins.DigitalOcean
 -- base
 import Data.Maybe (fromMaybe)
 import Control.Monad (void)
+import Control.Applicative (liftA2)
 
 -- imports from miscellaneous packages
 import Conduit -- conduit
@@ -37,7 +38,6 @@ import Network.HTTP.Client (RequestBody, newManager, HttpExceptionContent(Status
 import Network.HTTP.Client.TLS (tlsManagerSettings) -- http-client-tls
 import Network.HTTP.Conduit (Manager, responseBody) -- http-conduit
 import Network.HTTP.Types (statusCode) -- http-types
-import NicLib.NStdLib ((<&&>))
 
 -- text
 import Data.Text (Text)
@@ -169,7 +169,9 @@ listSpace cfg space = S3.gbrContents <$> withDOConfig cfg Aws.pureAws (S3.getBuc
 --
 -- I should learn more about this, but for now these seem like safe & harmless rules.
 objIsDir :: S3.ObjectInfo -> Bool
-objIsDir = (== 0) . S3.objectSize <&&> (=='/') . T'.last . S3.objectKey -- @last@ should be safe, assuming that no space with a null objectKey
+objIsDir = liftA2 (&&)
+    ((== 0) . S3.objectSize)
+    ((=='/') . T'.last . S3.objectKey) -- @last@ should be safe, assuming that no space with a null objectKey
 
 -- | Common combinator for use in catching exceptions
 is404 :: HttpExceptionContent -> Bool

@@ -3,7 +3,6 @@ allow-newer: true
 
 packages:
 - .
-- ../niclib/
 
 extra-deps:
 - aws-0.20
