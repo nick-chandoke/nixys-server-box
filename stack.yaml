@@ -5,4 +5,4 @@ packages:
 - .
 
 extra-deps:
-- aws-0.20
+- aws-0.21.1

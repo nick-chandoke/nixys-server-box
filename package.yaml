@@ -20,7 +20,7 @@ description:         Please see the README on GitHub at <https://github.com/nick
 
 dependencies:
 - base >= 4.7 && < 5
-- aws
+- aws >= 0.21.1
 - binary
 - bytestring
 - containers
