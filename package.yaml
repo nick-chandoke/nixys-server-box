@@ -13,39 +13,33 @@ extra-source-files:
 # synopsis:            Short description of your package
 # category:            Web
 
-# To avoid duplicated efforts in documentation and dealing with the
-# complications of embedding Haddock markup inside cabal files, it is
-# common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/nick-chandoke/nixys-server-box#readme>
-
 dependencies:
 - base >= 4.7 && < 5
 - aws >= 0.21.1
 - binary
 - bytestring
+- bytestring-trie
 - containers
-- cmark-gfm
 - conduit
 - fast-logger
 - filepath
-- hedis
-- html-conduit
 - http-conduit
 - http-client
 - http-client-tls
 - http-types
-- hxt
-- lucid
 - network
 - resourcet
 - streaming-commons
 - tagged
-- text
 - transformers
 - wai
 - wai-extra
 - warp
 - warp-tls
+- rio
+- vault
+- text
+- zlib
 
 library:
   source-dirs: src
@@ -53,6 +47,7 @@ library:
 default-extensions:
 - ApplicativeDo
 - Arrows
+- BangPatterns
 - DataKinds
 - DefaultSignatures
 - DeriveDataTypeable
@@ -67,6 +62,7 @@ default-extensions:
 - MultiParamTypeClasses
 - MultiWayIf
 - NamedFieldPuns
+- NoImplicitPrelude
 - NoMonomorphismRestriction
 - NumDecimals
 - OverloadedLists

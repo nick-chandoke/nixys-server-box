@@ -1,4 +1,6 @@
 module ServerBox.Plugins.Webroot where
+
+import RIO
 import Network.HTTP.Types (methodGet) -- http-types
 import ServerBox (onMethod, Route(..), static)
 import Network.Wai (pathInfo) -- network-wai

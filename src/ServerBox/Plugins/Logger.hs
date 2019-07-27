@@ -1,4 +1,6 @@
 module ServerBox.Plugins.Logger where
+
+import RIO
 import System.Log.FastLogger -- fast-logger
 import Network.Wai (Request, httpVersion, rawPathInfo, remoteHost, requestMethod)
 import Network.HTTP.Types (Status(statusCode))

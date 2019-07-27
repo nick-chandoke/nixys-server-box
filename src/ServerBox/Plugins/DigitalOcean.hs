@@ -10,7 +10,7 @@
 --
 -- === ResourceT & Manager and Strictness
 --
--- It's a good idea to 'seq' ('runResourceT' ⋯) @(action on the output of the ResourceT)@. I suspect that this has to do with the combination of how @Manager@ automatically closes itself and how @ResourceT@ cleans-up after itself. See 'objIsDir' for further discussion.
+-- It's a good idea to 'seq' ('runResourceT ⋯) @(action on the output of the ResourceT)@. I suspect that this has to do with the combination of how @Manager@ automatically closes itself and how @ResourceT@ cleans-up after itself. See 'objIsDir' for further discussion.
 --
 -- NB. this module uses the DigitalOcean term /space/ rather than the more generic AWS term /bucket/; they're the same thing, though.
 module ServerBox.Plugins.DigitalOcean
@@ -25,6 +25,8 @@ module ServerBox.Plugins.DigitalOcean
 , objIsDir
 , is404
 ) where
+
+import RIO
 
 -- base
 import Data.Maybe (fromMaybe)
@@ -41,7 +43,7 @@ import Network.HTTP.Types (statusCode) -- http-types
 
 -- text
 import Data.Text (Text)
-import qualified Data.Text as T'
+import qualified Data.Text as T
 
 -- aws
 import qualified Aws
@@ -161,7 +163,7 @@ listSpace cfg space = S3.gbrContents <$> withDOConfig cfg Aws.pureAws (S3.getBuc
 --
 -- @mapM_ (\obj -> when (objIsDir obj) $ TIO.putStrLn $ S3.objectKey obj) =<< runResourceT (listSpace cfg "a_space")@
 --
--- But after running the above code (do block with @seq@,) the one-liner began to work. Moral of the story: 'ResourceT'/'Manager' is weird, so
+-- But after running the above code (do block with @seq@,) the one-liner began to work. Moral of the story: 'ResourceT/'Manager' is weird, so
 --
 -- 1. keep code performed inside @ResourceT@ as small as possible
 -- 2. evaluate it strictly, and
@@ -171,7 +173,7 @@ listSpace cfg space = S3.gbrContents <$> withDOConfig cfg Aws.pureAws (S3.getBuc
 objIsDir :: S3.ObjectInfo -> Bool
 objIsDir = liftA2 (&&)
     ((== 0) . S3.objectSize)
-    ((=='/') . T'.last . S3.objectKey) -- @last@ should be safe, assuming that no space with a null objectKey
+    ((=='/') . T.last . S3.objectKey) -- @last@ should be safe, assuming that no space with a null objectKey
 
 -- | Common combinator for use in catching exceptions
 is404 :: HttpExceptionContent -> Bool

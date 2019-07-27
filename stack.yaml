@@ -1,8 +1,12 @@
-resolver: lts-12.13
+resolver: lts-13.19
 allow-newer: true
 
 packages:
 - .
 
+nix:
+  enable: true
+
 extra-deps:
 - aws-0.21.1
+- bytestring-trie-0.2.5.0@sha256:96498959cf2af0e3f1f3dfb526b78502c9fa8f21255a3506938ee2a26e61d653
