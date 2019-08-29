@@ -4,10 +4,25 @@ module ServerBox
 ( -- * Types
   RouteArr(..)
 , Route
+, RouteFlag(Next, Short)
+-- * Common Arrows
+, constA
+, guardA
+, guardAM
+, guardMA
+, guardMAM
+, boolE
+, orShort
+, orShortM
 , next
 , short
-, guardNext
-, guardShort
+-- ** Routing
+, routeByPath
+, onMethod
+, onPath
+, getQuery
+, plainResponse
+, normalize
 -- * Running the Server
 , stdwarp
 , stdwarpLocal
@@ -15,19 +30,9 @@ module ServerBox
 , stdSettings
 , stdHeaders
 , setDomain
--- * Routing
-, routeByPath
-, normalize
-, onMethod
-, onPath
-, getQuery
 -- * Sites
 , static
 , staticOn
--- * Utilities
-, plainResponse
-, constA
-, boolE
 -- , vput
 ) where
 
@@ -75,29 +80,29 @@ import Network.Wai.Middleware.Local (local)
 
 @
 import Network.Socket (SockAddr(..)) -- in the package called "network"
-let route1 =  'onPath' (=="\/path1")
-          >>> 'onMethod' (==methodGet)
-          >>> constA (responseLBS ok200 [] "You're on page 1!")
-    -- return error response if not from a particular IP address
-    route2 = badIP >>> constA (responseFile ok200 [] "\/dont\/use\/static\/filepaths.txt" Nothing)
-    badIP = arr (\\(remoteHost -> SockAddrInet _ addr) ->
-         'boolE' undefined (responseLBS forbidden403 [] "Invalid IP address.") (addr `elem` bannedAddrs))
-         >>> (short ||| id)
-    badResponse = responseLBS notImplemented501 mempty mempty
-in 'stdwarp' badResponse Nothing defaultSettings id $ route1 \<+\> route2 -- try route1; if it deferrs to route2, then try route2. If route2 fails, then badResponse is given.
+let route1 =  'onPath' (=="\/path1") >>>
+              ('onMethod' (==methodGet)  >>> constA (responseLBS ok200 [] "You're getting page 1!"))
+          <+> ('onMethod' (==methodPost) >>> constA (responseLBS ok200 [] "You're posting to page 1!"))
+    guardIP = guardA -- return error response if not from a particular IP address
+        (responseLBS forbidden403 [] "Banned IP address.")
+        (\\(remoteHost -> SockAddrInet _ addr) -> addr `elem` bannedAddrs)
+    route2 = guardIP >>> static "/approot/filesystem/"
+in 'stdwarp'
+    Nothing -- no TLS; we're doing HTTP only
+    (setPort 8080 stdSettings)
+    id -- no middleware
+    (responseLBS notImplemented501 mempty mempty)
+    (route1 \<+\> route2) -- try route1; if it deferrs to route2, then try route2. If route2 deferrs, then respond with the above HTTP 501.
 @
+
+This translates to the following routing:
+
+1. If path is @/path1@, respond with a "getting" or "posting" response on the respective methods.
+2. If path is not @/path1@, or method is neither GET nor POST, then check if the IP address is banned; if so, return a response saying so; else serve files from the local filesystem.
 
 -}
 newtype RouteArr m a b = RouteArr { runRoute :: a -> Compose m RouteFlag b } deriving (Functor)
 type Route m = RouteArr m Request Response
-
--- | Route which says to stop executing this route and try its successor, as determined by @(<+>)@
-next :: Applicative m => RouteArr m a b
-next = RouteArr (\_ -> Compose (pure Next))
-
--- | Stop computation and return a response immediately
-short :: Applicative m => RouteArr m Response b -- yes, this type signature is correct, as odd as it looks.
-short = RouteArr (Compose . pure . Short)
 
 data RouteFlag a
     = Next -- ^ try the next route (implemented by @(<+>)@)
@@ -154,16 +159,62 @@ instance Monad m => ArrowApply (RouteArr m) where
 instance Monad m => ArrowChoice (RouteArr m) where
     RouteArr a +++ RouteArr b = RouteArr (bitraverse a b)
 
--- | If False, @next@; if True, @id@
-guardNext :: Monad m => (b -> Bool) -> RouteArr m b b
-guardNext p = joinA (bool next id . p)
-  where
-    joinA :: ArrowApply a => (b -> a b c) -> a b c
-    joinA k = arr (\b -> (k b, b)) >>> app
+-- | How is this not already in @Control.Arrow@? Like, so common, right?
+constA :: Arrow a => c -> a b c
+constA = arr . const
 
--- | If False, @short resp@; if True, @id@. Note that the response cannot be defined in terms of the arrow's initial object. There's no clean way around that. See the definition of 'onMethod' for example code that effectively uses @guardShort@ where the response is a function of the initial object (a @Request@ in that case.)
-guardShort :: Monad m => Response -> (b -> Bool) -> RouteArr m b b
-guardShort resp p = (\x -> boolE resp x (p x)) ^>> (short ||| id)
+-- | On unsatisfied predicate, either try next route or immediately return a response.
+--
+-- Note that you cannot use @guardA@ to return a response if that response is a function of the arrow's input! For that, you should use 'onShort'.
+guardA :: Monad m => RouteFlag b -> (b -> Bool) -> RouteArr m b b
+guardA f p = RouteArr (\x -> Compose . pure $ bool f (Route x) $ p x)
+
+-- | 'guardA' that accepts a Kleisli predicate
+guardAM :: Monad m => RouteFlag b -> (b -> m Bool) -> RouteArr m b b
+guardAM f p = RouteArr (\x -> Compose $ bool f (Route x) <$> p x)
+
+-- | On @Nothing@, either try next route or immediately return a response.
+--
+-- Note that you cannot use @guardA@ to return a response if that response is a function of the arrow's input! For that, you should use 'onShort'.
+guardMA :: Monad m => RouteFlag c -> (b -> Maybe c) -> RouteArr m b c
+guardMA f p = RouteArr (Compose . pure . maybe f pure . p)
+
+-- | 'guardMA' that accepts a Kleisli
+guardMAM :: Monad m => RouteFlag c -> (b -> m (Maybe c)) -> RouteArr m b c
+guardMAM f p = RouteArr (Compose . fmap (maybe f pure) . p)
+
+-- | Useful when introducing conditions that may cause shorting
+boolE :: a -- ^ value to return on False, in a Left
+      -> b -- ^ value to return on True, in a Right
+      -> Bool
+      -> Either a b
+boolE a b c = if c then Right b else Left a
+
+{- | Convenience function. Usually useful with 'boolE', e.g.
+
+@
+orShort $ \req ->
+    let resp = responseLBS ok200 [] ("You gave query params: " <> fromStrict (rawQueryString req))
+    in boolE resp req (not $ null (queryString req))
+@
+
+* Note that it's easier to use 'guardA' if the response is not a function of the arrow's input.
+* @orShort@ is a stupidly simple function, but the fact that it's such a common function/pattern says something about the nature of @RouteArr@.
+
+-}
+orShort :: Applicative m => (b -> Either Response c) -> RouteArr m b c
+orShort f = RouteArr (Compose . pure . (Short ||| Route) . f)
+
+orShortM :: Functor m => (b -> m (Either Response c)) -> RouteArr m b c
+orShortM f = RouteArr (Compose . fmap (Short ||| Route) . f)
+
+-- | 'Next' as an arrow. Seemingly is accounted for entirely by guardA(M) already, but just in case not, I'm leaving it here.
+next :: Applicative m => RouteArr m a b
+next = RouteArr (\_ -> Compose (pure Next))
+
+-- | 'Short' as an arrow. Seemingly is accounted for entirely by orShort(M) already, but just in case not, I'm leaving it here.
+short :: Applicative m => RouteArr m Response b -- yes, this type signature is correct, as odd as it looks.
+short = RouteArr (Compose . pure . Short)
 
 -- | Note that, by definition of 'Application', the route you provide here must be in ^IO@. Seeing as @routeToApp@ will always be the last step in preparing a route, that should be OK.
 routeToApp :: Response -- ^ returned when the route given evaluates to "try next route"
@@ -235,11 +286,9 @@ setDomain d = (setHost (Host d), forceDomain $ let bseh = BSC.pack d in bool Not
 --
 -- Note that the path is never null; it always either begins with, or entirely consists of, a forward-slash
 onPath :: Monad m => (ByteString -> Bool) -> RouteArr m Request Request
-onPath p = guardNext (p . rawPathInfo)
+onPath p = guardA Next (p . rawPathInfo)
 
 -- | Modify a route so that it tries its successor route if a method predicate fails, returning 405 if the desired method is not the one in the request. Probably only use after @onPath@ or using pattern matching to identify a path.
---
--- @onMethod (==methodGet) . Route $ \\req -> ⋯@ is a very common idiom.
 onMethod :: Monad m => (Method -> Bool) -> RouteArr m Request Request
 onMethod p = arr (\req ->
     let meth = requestMethod req
@@ -318,16 +367,6 @@ normalize r =
     r { pathInfo = foldr (\a b -> if T.null a then b else T.toLower a : b) [] $ pathInfo r
       , queryString = M.toList . M.fromList $ queryString r
       }
-
-constA :: Arrow a => c -> a b c
-constA = arr . const
-
--- | Useful when introducing conditions that may cause shorting
-boolE :: a -- ^ value to return on False, in a Left
-      -> b -- ^ value to return on True, in a Right
-      -> Bool
-      -> Either a b
-boolE a b c = if c then Right b else Left a
 
 {-
 -- | Insert a value into a Vault, creating a new Key in the process; return the key and vault.

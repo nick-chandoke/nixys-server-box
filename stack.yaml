@@ -1,4 +1,4 @@
-resolver: lts-13.12
+resolver: lts-14.3
 allow-newer: true
 
 packages:
