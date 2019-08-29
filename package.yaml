@@ -1,5 +1,5 @@
 name:                nixys-server-box
-version:             0.1.2.0
+version:             0.2.0
 github:              "nick-chandoke/nixys-server-box"
 license:             BSD3
 author:              "Nicholas Chandoke"
@@ -16,7 +16,7 @@ extra-source-files:
 dependencies:
 - base >= 4.7 && < 5
 - aws >= 0.21.1
-- binary
+# - binary
 - bytestring
 - bytestring-trie
 - containers
@@ -30,14 +30,13 @@ dependencies:
 - network
 - resourcet
 - streaming-commons
-- tagged
-- transformers
+# - tagged
 - wai
 - wai-extra
 - warp
 - warp-tls
 - rio
-- vault
+# - vault
 - text
 - zlib
 

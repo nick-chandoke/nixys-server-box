@@ -1,33 +1,47 @@
-{-# OPTIONS_GHC -Wno-orphans #-}
-
--- TODO (now!): Partition this module into two modules: one that uses warp, and one that uses WAI only
--- TODO: consider adding Arrow instance to Route? This would be for prettier-looking route blocks than what semigroup provides.
 -- TODO: learn how to use HTTP/2-specific functions in Network.Wai.Handler.Warp? To what extent are these used automatically or are not so useful?
 -- | Run a warp server, and routing types & methods
 module ServerBox
-( Route(..)
+( -- * Types
+  RouteArr(..)
+, Route
+, next
+, short
+, guardNext
+, guardShort
+-- * Running the Server
 , stdwarp
 , stdwarpLocal
+-- * Server Options
 , stdSettings
 , stdHeaders
 , setDomain
+-- * Routing
 , routeByPath
 , normalize
 , onMethod
 , onPath
+, getQuery
+-- * Sites
 , static
 , staticOn
+-- * Utilities
 , plainResponse
-, vput
+, constA
+, boolE
+-- , vput
 ) where
 
 -- base
 import Control.Applicative
+import Control.Arrow
+import Control.Category
 import Control.Concurrent (forkIO)
-import Control.Monad (void)
+import Control.Monad
 import Data.Bool (bool)
 import Data.Maybe (fromMaybe)
-import Prelude hiding (FilePath)
+import Data.Bitraversable (bitraverse)
+import Data.Functor.Compose
+import Prelude hiding (FilePath, (.), id)
 
 -- rio (and deps)
 import Data.ByteString.Builder (Builder, toLazyByteString, charUtf8)
@@ -39,11 +53,10 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified RIO.Map as M
 import qualified RIO.Text as T
 
-import Data.Vault.Lazy
-import Control.Monad.Trans.Except (ExceptT(..), runExceptT) -- transformers
+-- import Data.Vault.Lazy hiding (empty)
 import System.FilePath (pathSeparator) -- filepath
 import Data.Streaming.Network.Internal (HostPreference (Host)) -- streaming-commons
-import Network.HTTP.Types (Method, hLocation, methodNotAllowed405, movedPermanently301, methodGet, ok200, notImplemented501) -- http-types
+import Network.HTTP.Types (Method, hLocation, methodNotAllowed405, movedPermanently301, methodGet, ok200) -- http-types
 import Network.Wai (Middleware, Request(..), Response, Application, rawPathInfo, requestMethod, pathInfo, responseLBS, responseFile) -- wai
 import Network.Wai.Handler.Warp (run, runSettings, Settings, setServerName, defaultSettings, setHost, setTimeout, setProxyProtocolNone, setPort, getPort, Port) -- warp
 import Network.Wai.Handler.WarpTLS (runTLS, TLSSettings) -- warp-tls
@@ -56,57 +69,110 @@ import Network.Wai.Middleware.ForceSSL (forceSSL)
 import Network.Wai.Middleware.ForceDomain (forceDomain)
 import Network.Wai.Middleware.Local (local)
 
-short :: Applicative m => e -> ExceptT e m a
-short = ExceptT . pure . Left
-
-{- | Route a 'Request' to a 'Response'. Compose routes with @(<>)@. This is the same as composing @ExceptT (Maybe Response) m Response@'s with @(\<|\>)@.
-
-* @pure resp@ returns a successful response.
-* @short (Just resp)@ returns a response that is unsuccessful. This is used by functions like 'onMethod' to exit route computations early.
-* @short Nothing@ will exit the route computation and try the next route.
+{- | Routes may either fail with a response ('short',) or fail such that they try another route ('next'.) If a route fails with a response, then the computation short circuits immediately; (other failures that may have occured had the failure not been there) will occur once that failure is fixed. In other words, RouteArr does not yet support Validations-style error collecting. Obviously, this is under consideration and may be added in a later release.
 
 === Example
 
 @
-    import Network.Socket (SockAddr(..)) -- in the package called "network"
-    let route1 = Route $ \\req -\> do
-            'onPath' (=="\/path1") req -- tries next route if requested path is not "\/path1" (returns short Nothing)
-            'onMethod' (==methodGet) req -- returns 405 if unequal methods (returns short (Just 405 response))
-            pure $ 'responseLBS' ok200 [] "You're on page 1!" -- successful (normal) return!
-        route2 = Route $ \\req -\> do
-            -- return error response if not from a particular IP address
-            when
-                (case remoteHost req of SockAddrInet _ addr -> addr \/= tupleToHostAddress (72,181,148,78))
-                (short . Just $ responseLBS forbidden403 [] "Invalid IP address.")
-            pure $ responseFile ok200 [] "\/dont\/use\/static\/filepaths.txt" Nothing
-    in 'stdwarp' Nothing defaultSettings id $ route1 \<\> route2
+import Network.Socket (SockAddr(..)) -- in the package called "network"
+let route1 =  'onPath' (=="\/path1")
+          >>> 'onMethod' (==methodGet)
+          >>> constA (responseLBS ok200 [] "You're on page 1!")
+    -- return error response if not from a particular IP address
+    route2 = badIP >>> constA (responseFile ok200 [] "\/dont\/use\/static\/filepaths.txt" Nothing)
+    badIP = arr (\\(remoteHost -> SockAddrInet _ addr) ->
+         'boolE' undefined (responseLBS forbidden403 [] "Invalid IP address.") (addr `elem` bannedAddrs))
+         >>> (short ||| id)
+    badResponse = responseLBS notImplemented501 mempty mempty
+in 'stdwarp' badResponse Nothing defaultSettings id $ route1 \<+\> route2 -- try route1; if it deferrs to route2, then try route2. If route2 fails, then badResponse is given.
 @
 
-As you can see, this makes arbitrary routes arbitrarily composable, allowing for failure.
 -}
-newtype Route m = Route { rte :: Request -> ExceptT (Maybe Response) m Response }
+newtype RouteArr m a b = RouteArr { runRoute :: a -> Compose m RouteFlag b } deriving (Functor)
+type Route m = RouteArr m Request Response
 
--- ⊥-const monoid. Used in the Semigroup instance of @Route@ (the @Alternative@ instance for @ExceptT e m a@, requires that @e@ be a monoid; this imples that @Maybe Response@ must be a monoid, thus implying that @Response@ must be a monoid.)
--- It can afford to be ⊥ because it's only used in searching for a route, which always ends on @mempty@ (see @routeToApp@) - notImplemented501 - in the @stdwarp@ function; thus the value of the monoid (Left Response's) is never dereferenced.
--- This being said, don't confuse the Response's semigroup instance with (a -> f b)'s semigroup instance!
--- If you're modifying StdWarp, you may want to change this instance.
-instance Semigroup Response where (<>) = undefined
-instance Monoid Response where
-    mempty = responseLBS notImplemented501 mempty mempty
+-- | Route which says to stop executing this route and try its successor, as determined by @(<+>)@
+next :: Applicative m => RouteArr m a b
+next = RouteArr (\_ -> Compose (pure Next))
 
--- One cannot use Data.Monoid.Alt because Kleisli morphisms do not compose under that definition. Also, though we're non-associatively composing Kleisli's, this chaining is done by applying a common object (Request) to all in the sequence, then composing them via (<|>), not (>>=). In short: this composition looks like it can be expressed in terms of common objects, but Monoid is the most suitable object for implementing this manner of composition.
--- | Compose Alternative Kleisli's under @(\<|\>)@.
-instance Monad m => Semigroup (Route m) where
-    Route f <> Route g = Route $ \a -> f a <|> g a
+-- | Stop computation and return a response immediately
+short :: Applicative m => RouteArr m Response b -- yes, this type signature is correct, as odd as it looks.
+short = RouteArr (Compose . pure . Short)
 
-instance Monad m => Monoid (Route m) where
-    mempty = Route $ const (pure mempty)
+data RouteFlag a
+    = Next -- ^ try the next route (implemented by @(<+>)@)
+    | Short Response -- ^ stop route computation and respond (implemented by @(.)@)
+    | Route a -- ^ usual routing (implemented by @(.)@)
+    deriving (Functor)
 
--- In regards to Response's Semigroup instance, (<> mempty) is used here in routeToApp to guarantee that we don't bottom-out.
--- Note that, by definition of 'Application', the route you provide here must be in IO. Seeing as routeToApp will always be the last step in preparing a route, I suppose that's OK.
-routeToApp :: Route IO -> Application
-routeToApp r = \req resp ->
-    resp . either (fromMaybe mempty) id =<< runExceptT (rte (r <> mempty) $ req)
+instance Applicative RouteFlag where
+    pure = Route
+    Route f <*> Route x = Route (f x)
+    -- we can't apply a function to either a Next or Short; thus simply return the Next or Short
+    Route _ <*> Next = Next
+    Route _ <*> Short resp = Short resp
+    -- neither Next nor Short can contain functions; thus they must short, ignoring the right argument.
+    Next <*> _ = Next
+    Short resp <*> _ = Short resp
+    -- TODO: consider Short a <*> Short b to accumulate à la validations Applicative. Accumulation could be, for example, adding partial responses to the <body> ofa DOM.
+
+instance Alternative RouteFlag where
+    empty = Next
+    Next <|> x = x
+    x <|> _ = x
+
+-- currently unused. Should be used in the Category definiton below.
+instance Monad RouteFlag where
+    Route x >>= k = k x
+    Next >>= _ = Next
+    Short r >>= _ = Short r
+
+-- is there any way to define this using the monad instance for RouteFlag? Probably not.
+-- I'd need a function :: (Monad m, Monad n) => m (n a) -> (a -> m (n b)) -> m (n b)
+instance Monad m => Category (RouteArr m) where
+    id = RouteArr pure
+    RouteArr g . RouteArr f = RouteArr $ \a -> Compose $ getCompose (f a) >>= \case
+        Route x -> getCompose (g x)
+        Short resp -> pure (Short resp)
+        Next -> pure Next
+
+instance Monad m => Arrow (RouteArr m) where
+    arr = RouteArr . (pure .)
+    RouteArr u *** RouteArr v = RouteArr $ \(b,d) -> liftA2 (,) (u b) (v d)
+
+-- these monoidal arrow instances do not use Compose's Alternative instance. This is mainly in the interest of IO's Alternative
+-- being that anything not fail/mzero/empty is OK, which is not what we want! We want to jump inside the category
+-- to check for Next!
+instance (Monad m) => ArrowZero (RouteArr m) where zeroArrow = RouteArr (const (Compose $ pure empty))
+instance (Monad m) => ArrowPlus (RouteArr m) where
+    RouteArr l <+> RouteArr r = RouteArr $ \a -> Compose (liftA2 (<|>) (getCompose $ l a) (getCompose $ r a))
+
+-- trivial definition of `app`: unwraps, applies, then re-wraps the `RouteArr` newtype.
+instance Monad m => ArrowApply (RouteArr m) where
+    app = RouteArr (\(RouteArr a, b) -> a b)
+
+instance Monad m => ArrowChoice (RouteArr m) where
+    RouteArr a +++ RouteArr b = RouteArr (bitraverse a b)
+
+-- | If False, @next@; if True, @id@
+guardNext :: Monad m => (b -> Bool) -> RouteArr m b b
+guardNext p = joinA (bool next id . p)
+  where
+    joinA :: ArrowApply a => (b -> a b c) -> a b c
+    joinA k = arr (\b -> (k b, b)) >>> app
+
+-- | If False, @short resp@; if True, @id@. Note that the response cannot be defined in terms of the arrow's initial object. There's no clean way around that. See the definition of 'onMethod' for example code that effectively uses @guardShort@ where the response is a function of the initial object (a @Request@ in that case.)
+guardShort :: Monad m => Response -> (b -> Bool) -> RouteArr m b b
+guardShort resp p = (\x -> boolE resp x (p x)) ^>> (short ||| id)
+
+-- | Note that, by definition of 'Application', the route you provide here must be in ^IO@. Seeing as @routeToApp@ will always be the last step in preparing a route, that should be OK.
+routeToApp :: Response -- ^ returned when the route given evaluates to "try next route"
+           -> Route IO -- ^ route to convert
+           -> Application
+routeToApp defaultResp (RouteArr a) = \req resp -> getCompose (a req) >>= \case
+    Route r -> resp r
+    Short r -> resp r
+    Next -> resp defaultResp
 
 -- | Run a warp server on 80 and 443 by default, forcing TLS for all connections if you provide @Just@ a @TLSSettings@. See 'Route' for an example of running stdwarp.
 --
@@ -118,14 +184,15 @@ routeToApp r = \req resp ->
 stdwarp :: Maybe (TLSSettings, Port) -- ^ TLSSettings required if you're using HTTPS
         -> Settings
         -> Middleware
+        -> Response -- ^ returned when the route given evaluates to "try next route"
         -> Route IO
         -> IO ()
-stdwarp mtls s mw r = void $ case mtls of
+stdwarp mtls s mw dr r = void $ case mtls of
     Nothing ->
-        runSettings s . mw $ routeToApp r
+        runSettings s . mw $ routeToApp dr r
     Just (tls, sec_port) -> do
-        void . forkIO . run (getPort s) . forceSSL $ \_ resp -> resp (responseLBS ok200 [] "")
-        runTLS tls (setPort sec_port s) . addHeaders [("Strict-Transport-Security", "max-age=31536000; includeSubdomains")] . mw $ routeToApp r
+        void . forkIO . run (getPort s) . forceSSL $ const ($ responseLBS ok200 [] "")
+        runTLS tls (setPort sec_port s) . addHeaders [("Strict-Transport-Security", "max-age=31536000; includeSubdomains")] . mw $ routeToApp dr r
 
 -- | Run a Route on localhost on http (allows same-host-only connections, but traffic is still plaintext! Other applications on the host computer can read that traffic!)
 --
@@ -133,14 +200,15 @@ stdwarp mtls s mw r = void $ case mtls of
 stdwarpLocal :: Response -- ^ response for when a non-local connection attempts to connect to the server. Remember that @mempty@ is a fine dummy value
              -> Settings
              -> Middleware
+             -> Response -- ^ returned when the route given evaluates to "try next route"
              -> Route IO
              -> IO ()
-stdwarpLocal lr s mw
+stdwarpLocal lr s mw dr
     = runSettings s
     . local lr
     . addHeaders [("Access-Control-Allow-Origin", "null")] -- no-hassle AJAX
     . mw
-    . routeToApp
+    . routeToApp dr
 
 -- | 'defaultSettings' + 'setTimeout' 10. Also disables proxy protocol and sets empty @Server@ header.
 stdSettings :: Settings
@@ -160,52 +228,50 @@ stdHeaders = [ ("X-Frame-Options", "deny")
 setDomain :: String -> (Settings -> Settings, Middleware)
 setDomain d = (setHost (Host d), forceDomain $ let bseh = BSC.pack d in bool Nothing (Just bseh) . (==bseh))
 
--- | Modify a route so that it tries its successor route if a method predicate fails.
--- | Match a method, returning 405 if the desired method is not the one in the request. Probably only use after @onPath@ or using pattern matching to identify a path.
+-- | Try successor route if a path predicate fails.
 --
--- @onMethod (==methodGet) . Route $ \\req -> ⋯@ is a very common idiom.
-onMethod :: Monad m => (Method -> Bool) -> Route m -> Route m
-onMethod m (Route r) = Route $ \req -> let meth = requestMethod req in
-    if m meth then r req
-    else short . Just $ responseLBS methodNotAllowed405 [] ("This route does not accept the HTTP " <> fromStrict meth <> " method.")
-
--- | Modify a route so that it tries its successor route if a path predicate fails.
---
--- @onPath (=="\/") . staticOn (const "https:\/\/mybucket.somecdn.com\/html\/home.html")@ is a common idiom for matching the homepage.
+-- @onPath (=="\/") >>> staticOn (const "https:\/\/mybucket.somecdn.com\/html\/home.html")@ is a common idiom for matching the homepage. This loads the page from the server if the CDN was down.
 -- (By the way, if you redirect home, remember to select either "\/" or "\/home" as the canonical version.)
 --
 -- Note that the path is never null; it always either begins with, or entirely consists of, a forward-slash
-onPath :: Monad m => (ByteString -> Bool) -> Route m -> Route m
-onPath m (Route r) = Route $ \req -> if m (rawPathInfo req) then r req else short Nothing
+onPath :: Monad m => (ByteString -> Bool) -> RouteArr m Request Request
+onPath p = guardNext (p . rawPathInfo)
+
+-- | Modify a route so that it tries its successor route if a method predicate fails, returning 405 if the desired method is not the one in the request. Probably only use after @onPath@ or using pattern matching to identify a path.
+--
+-- @onMethod (==methodGet) . Route $ \\req -> ⋯@ is a very common idiom.
+onMethod :: Monad m => (Method -> Bool) -> RouteArr m Request Request
+onMethod p = arr (\req ->
+    let meth = requestMethod req
+--      resp = responseLBS methodNotAllowed405 [] ("This route does not accept the HTTP " <> fromStrict meth <> " method.")
+    in boolE undefined {- resp -} req (p meth)) >>> (next {- short -} ||| id)
+
+-- | Retrieve a query parameter, failing the route if it's not found.
+getQuery :: Monad m => ByteString -> RouteArr m Request ByteString
+getQuery attr = arr (maybe (Left undefined) Right . lookup attr . queryString) >>> (next ||| arr (fromMaybe mempty))
 
 -- | Host a static site where pages are predictably named and stored on a 3rd party server, e.g. S3 or BackBlaze, or some CDN. I'm going to assume it's a CDN. So, @staticOn@ 301-redirects to the "translated" location on the CDN.
 --
 -- For example, to serve on an AWS S3-compatible CDN, one may do
--- @let cdn = (\p -\> "https:\/\/mybucket.somecdn.com" \<\> p) in staticOn@, which, would redirect, /e.g./ "\/\/mysite.com\/path1" to "https:\/\/mybucket.somecdn.com\/path1". *Note that the static URL does not end with a slash.* This doesn't always need to be the case, but you must always consider that the path being transformed (the @p@ lambda variable, in this example) /does/ begin with a leading slash!
+-- @let cdn = (\\p -\> "https:\/\/mybucket.somecdn.com" \<\> p) in staticOn@, which, would redirect, /e.g./ "\/\/mysite.com\/path1" to "https:\/\/mybucket.somecdn.com\/path1". *Note that the static URL does not end with a slash.* This doesn't always need to be the case, but you must always consider that the path being transformed (the @p@ lambda variable, in this example) /does/ begin with a leading slash!
 --
 -- === Suggestions
 --
 -- * have all links – /e.g./ @href@ and @src@ attributes – point directly to the static resources on the CDN
--- * you'll almost alway want to use with @onMethod (==methodGet)@
+-- * you'll almost always want to use with @onMethod (==methodGet)@
 -- * if you really are using a CDN to host all your (non-dynamically-generated) webpages (like you /should/,) then be sure to <https://support.google.com/webmasters/answer/139394?hl=en let search engines know that the pages are really yours>, rather than you just linking to someone else's page! Also, set access to /Public/ in your DigitalOcean spaces dashboard!
-staticOn :: (ByteString -> ByteString)
---       -> Route IO -- ^ 404 response in case resource missing on static repository
-         -> Route IO
-staticOn f {- f04 -} = Route $ \req ->
-    pure $ responseLBS movedPermanently301 [(hLocation, f $ rawPathInfo req)] mempty
-    -- I considered sending a HEAD request to see if the file is present; else run a 404 route. But, eh.
+staticOn :: Monad m => (ByteString -> ByteString) -> Route m
+staticOn f = arr (\req -> responseLBS movedPermanently301 [(hLocation, f $ rawPathInfo req)] mempty)
 
--- | Load a local *file* from the requested path, relative to a root path, *on the local filesystem*.
+-- | Load a local file from the requested path, relative to a root path, on the local filesystem.
 -- Only triggers if method is GET.
 static :: Monad m
        => String -- ^ root path
        -> Route m
-static root = onMethod (==methodGet) . Route $ \req ->
-    let ps = pathInfo req
---      aboveRoot = isNothing $ foldl' (\mb a -> mb *>= \b -> let b' = b + (case a of ".." -> (-1); "." -> 0; _ -> 1) in if b' < 0 then Nothing else Just b') (Just 0) ps -- looks like warp already accounts for this :)
-    in do
---      when aboveRoot (short . Just $ responseLBS forbidden403 [] "Requested path is ancestor of server's root directory!")
-        pure $ responseFile ok200 [] (root <> T.unpack (T.intercalate (T.singleton pathSeparator) ps)) Nothing -- responseFile automatically returns 404 if file not found, despite the ok200 here
+static root = onMethod (==methodGet)
+           >>^ (\req -> responseFile ok200 [] (root <> T.unpack (T.intercalate (T.singleton pathSeparator) (pathInfo req))) Nothing) -- responseFile automatically returns 404 if file not found, despite the ok200 here. Below is code that guards against accessing ancestors of the root. It's currently unused b/c it seems that warp already accounts for that. However, just in case, I'm leaving it here.
+-- aboveRoot = isNothing $ foldl' (\mb a -> mb >>= \b -> let b' = b + (case a of ".." -> (-1); "." -> 0; _ -> 1) in if b' < 0 then Nothing else Just b') (Just 0) (pathInfo req)
+-- when aboveRoot (short $ responseLBS forbidden403 [] "Requested path is ancestor of server's root directory!")
 
 -- | The most common way to route: by URL. This uses a trie for efficient storage and fast lookup. Namely, composing routes by @(\<\>)@\/@(\<|\>)@ is linearly complex, but routing on paths via a trie is probably of a logarithmic order.
 --
@@ -229,16 +295,19 @@ static root = onMethod (==methodGet) . Route $ \req ->
 --
 -- === SEO
 --
--- For SEO, @routeByPath@ works with unary URLs only, considering that <https://support.google.com/webmasters/answer/7451184?hl=en hierarchical relations are important for SEO> (see the section "Navigation is important for search engines"). The parameter obviously goes in the query. This works for hackage and wikipedia, since articles aren't hierarchical. Note, in the <https://lh3.googleusercontent.com/FkXf1NMLRBDRD0-82WWHYCu7_nHxCzkUaMDFDAuGiFRYIrtgO3wqSJdtSFhpnyu3yeE=w314 above linked article's example>, that there's a false hierarchy: they're using time periods as hierarchies. Because hierarchies are defined by a total ordering on any branch, "news" and time period, or "price-guides" and time period cannot be hierarchically related, because (these) prepositional phrases compose commutatively, /e.g./ "the news in 1948" has identical meaning as "1948's news." Be careful to not assume false orderings.
+-- For SEO, @routeByPath@ works with unary URLs only, considering that <https://support.google.com/webmasters/answer/7451184?hl=en hierarchical relations are important for SEO> (see the section "Navigation is important for search engines"). The parameter obviously goes in the query. This works for hackage and wikipedia, since articles aren't hierarchical. Note, in the <https://lh3.googleusercontent.com/FkXf1NMLRBDRD0-82WWHYCu7_nHxCzkUaMDFDAuGiFRYIrtgO3wqSJdtSFhpnyu3yeE=w314 above linked article's example>, that there's a false hierarchy: they're using time periods as hierarchies. Because hierarchies are defined by a total ordering on any branch, "news" and time period, or "price-guides" and time period cannot be hierarchically related, because (these) prepositional phrases compose commutatively, /e.g./ "news 1948" has identical meaning as "1948 news." Be careful to not assume false orderings.
 routeByPath :: Monad m => Trie (Route m) -> Route m
-routeByPath t = Route $ \req ->
+routeByPath t = arr (\req ->
     let !path' = toStrict . toLazyByteString . foldl' (\b a -> b <> foldText a <> charUtf8 '/') mempty $ pathInfo req
     in case Trie.match t path' of
-        Just (_,Route route,"/") -> route req
-        _ -> pure mempty
+        Just (_, route, "/") -> (route,req)
+        _ -> (next,req)) >>> app
   where
     foldText :: Text -> Builder
     foldText = T.foldl' (\b -> (b <>) . charUtf8) mempty
+
+plainResponse :: Monad m => ByteString -> RouteArr m b Response
+plainResponse s = constA (responseLBS ok200 [] (fromStrict s))
 
 -- TODO: override 'rawPathInfo' and not 'pathInfo' for speed.
 -- | A suggested request normalization function: removes trailing or multiple consecutive slashes, and nubs & sorts query parameters in lexiographic order by key.
@@ -250,11 +319,19 @@ normalize r =
       , queryString = M.toList . M.fromList $ queryString r
       }
 
--- | Mostly useful for testing. Always responds OK 200 with the provided string and no headers.
-plainResponse :: Monad m => ByteString -> Route m
-plainResponse bs = Route $ \_ -> pure $ responseLBS ok200 [] (fromStrict bs)
+constA :: Arrow a => c -> a b c
+constA = arr . const
 
+-- | Useful when introducing conditions that may cause shorting
+boolE :: a -- ^ value to return on False, in a Left
+      -> b -- ^ value to return on True, in a Right
+      -> Bool
+      -> Either a b
+boolE a b c = if c then Right b else Left a
+
+{-
 -- | Insert a value into a Vault, creating a new Key in the process; return the key and vault.
 -- because who ever creates a key without immediately using it to put in a value thereafter?
 vput :: a -> Vault -> IO (Key a, Vault)
 vput val vault = (\nk -> (nk, insert nk val vault)) <$> newKey
+-}

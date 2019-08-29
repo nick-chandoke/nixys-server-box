@@ -1,13 +1,15 @@
 # Nixy's Server Box
 
+*currently under revision. I'm not exactly sure what direction it's headed, though it seems that arrows are good for describing routes.*
+
 What is: few things that warp didn't provide that I needed for making websites and website servers.
 
 Features:
 
 * Routing
-* Markup abstractions
+* <s>Markup abstractions</s> *moved to [data-manip](https://github.com/nick-chandoke/data-manip/tree/master/src/Transform)*
     * Inline functions/markup transforms
-    * ```\<head\>``` is a function of ```\<body\>```
+    * `\<head\>` is a function of `\<body\>`
     * Variable substitution
 * Let's Encrypt's Webroot plugin route
 * Easy logger interface
@@ -15,7 +17,7 @@ Features:
 
 ## *Another* Server Library? C'mon.
 
-Yeah, sorry. I like things small &amp; simple, built atop common mathematical constructs and HTTP primitives, using plain-ol' Haskell rather than a fancy-shmancy eDSL. After all, any programmer writing a server should be familiar with ```http-types```, ```warp``` and ```wai```, as they form a minimalist yet robust implementation of an HTTP server. This library adds some functionality onto these packages for convenience in writing a SaaS, but it still requires the programmer to understand these basics. In other words: nothing should seem "magic."
+Yeah, sorry. I like things small &amp; simple, built atop common mathematical constructs and HTTP primitives, using plain-ol' Haskell rather than a fancy-shmancy eDSL. After all, any programmer writing a server should be familiar with `http-types`, `warp` and `wai`, as they form a minimalist yet robust implementation of an HTTP server. This library adds some functionality onto these packages for convenience in writing a SaaS, but it still requires the programmer to understand these basics. In other words: nothing should seem "magic."
 
 I'm not a fan of the "scaffolding" or "plugin" design of most web frameworks, with their unique eDSLs and monad transformer stacks that obscure the inner workings of the server and require time to learn. HTTP servers are alredy simple; if we try to further simplify them, we just end-up introducing complicating fluff.
 
@@ -27,8 +29,8 @@ That being said, the server box certainly isn't for everyone. It's much more abo
 
 Becasue the server box is minimalist, if you're looking to use it as a web framework, you'll want to use some more packgages. Here are my recommendations:
 
-* [```data-manip```](https://github.com/nick-chandoke/data-manip) for working with and generating HTML
-* [```beam```](https://tathougies.github.io/beam/) for databases
+* [`data-manip`](https://github.com/nick-chandoke/data-manip) for working with and generating HTML
+* <s>[`beam`](https://tathougies.github.io/beam/) for databases</s> wow I couldn't get that thing working. bad.
 
 ## Not for Production Use
 
@@ -36,7 +38,7 @@ I'm not intimate with web standards or needs of professional web developers. Thu
 
 ## Markup Design Concepts (Experimental)
 
-*Originally I wrote HTML functionality into this library, but I've since considered HTML as just another data format, and have moved that funcionality to my ```data-manip``` library. Thus this section still applies to HTML, and thus web design, but perhaps it's out-of-place here.*
+*Originally I wrote HTML functionality into this library, but I've since considered HTML as just another data format, and have moved that funcionality to my `data-manip` library. Thus this section still applies to HTML, and thus web design, but perhaps it's out-of-place here.*
 
 tl;dr: WYSIWYG bad, WYSIWYM (What You See Is What You Mean) good. Prefer TEX over ODT. Use graph editors for graphs, table editors for tables, etc. Let them be converted to HTML automatically only.
 
@@ -47,6 +49,8 @@ One of my general interests as a programmer is finding the most elegant expressi
 Secondly, there are only so many common structures: mostly tables, lists, sets, trees, graphs. Maybe it's daring, but I assume that one needs to create only so many general elegant catamorphisms about these few structures in order to create a solid document-to-markup framework that works fine in the grand majority of use cases.
 
 ### Templating and Auto-Design
+
+**TODO**: move to some other place. This is about webpages, not servers. Furthermore, better-than-www should be discussed as well.
 
 Have you used [graphviz](https://graphviz.gitlab.io/about/)? The way it works to automatically elegantly arrange graphs is really cool; it uses a concept of potential energy. Anyway, why don't we automatically arrange HTML, too? There aren't many HTML designs: we have list-based things &ndash; navbars, \<ol\>, \<ul\> &ndash;  either vertical or horizontal, hidden or not, on the top, left, right, or bottom of a screen. We have main content, a header and a footer. And of course, some common markdown-supported elements like \<p\>. And of course, we can arbitrarily compose/nest sets or sequences of all these elements. That's the grand majority of webpage content. Why are we needing to layout this stuff by-hand? Let's be honest, folks: we're all basically doing the same webpage design. That's just a testament to the fact that there exists a design that maximizes readability & engagement together. Web design isn't an art project; it can (and *should*) be calculated, given a set of objects and constraints. Semantic web elements, and accessibility, should come built-in, for starters.
 
