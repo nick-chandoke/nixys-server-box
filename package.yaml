@@ -16,28 +16,28 @@ extra-source-files:
 dependencies:
 - base >= 4.7 && < 5
 - aws >= 0.21.1
-# - binary
 - bytestring
 - bytestring-trie
-- containers
 - conduit
+- conduit-extra
+- containers
 - fast-logger
 - filepath
-- http-conduit
 - http-client
 - http-client-tls
+- http-conduit
 - http-types
 - network
 - resourcet
+- rio
 - streaming-commons
-# - tagged
+- text
+- typed-process
+- vault
 - wai
 - wai-extra
 - warp
 - warp-tls
-- rio
-# - vault
-- text
 - zlib
 
 library:

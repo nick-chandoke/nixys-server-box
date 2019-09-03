@@ -1,3 +1,4 @@
+-- | A webroot plugin that I wrote. It worked. If you need a more complete solution, see [snoyberg's `warp-letsencrypt`](https://github.com/snoyberg/warp-letsencrypt).
 module ServerBox.Plugins.Webroot where
 
 import RIO

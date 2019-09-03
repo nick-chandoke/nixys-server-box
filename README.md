@@ -1,59 +1,46 @@
 # Nixy's Server Box
 
-*currently under revision. I'm not exactly sure what direction it's headed, though it seems that arrows are good for describing routes.*
+Hi I'm Nic C and this is my server framework. Es smol.
 
-What is: few things that warp didn't provide that I needed for making websites and website servers.
+Web servers are hardly more than morphisms from HTTP requests to HTTP responses. Nixy's Server Box is created in this vein; it's merely a thin wrapper around [warp](https://www.stackage.org/haddock/lts-14.4/warp-3.2.28/Network-Wai-Handler-Warp.html), plus a routing mechanism. Notably, it does not feature:
 
-Features:
+* monad transformers
+* type families
+* special syntaxes/eDSLs
+* more than one or two (one's a wrapper around the other) framework-specific data types
+
+It has no promise of fanciness. It's plain, small, fast, and simple. If you know your basic Haskeller's cat theory&mdash;arrows, applicatives, monads, and monoids&mdash;and you're familiar with what an HTTP server is, then there's nothing to learn to get started. Specifically, you'll need to know the [`http-types`](https://www.stackage.org/lts-14.4/package/http-types-0.12.3), `warp` and `wai` packages.
+
+## Features
 
 * Routing
-* <s>Markup abstractions</s> *moved to [data-manip](https://github.com/nick-chandoke/data-manip/tree/master/src/Transform)*
-    * Inline functions/markup transforms
-    * `\<head\>` is a function of `\<body\>`
-    * Variable substitution
-* Let's Encrypt's Webroot plugin route
-* Easy logger interface
-* Easy AWS S3 bucket/DigitalOcean spaces interface
+* (Naïve) Let's Encrypt's Webroot plugin route
+* Easy logger interface (NCSA Common Log Format)
+* Easy AWS S3 bucket / DigitalOcean spaces interface
 
-## *Another* Server Library? C'mon.
+## Minimalism Philosophy
 
-Yeah, sorry. I like things small &amp; simple, built atop common mathematical constructs and HTTP primitives, using plain-ol' Haskell rather than a fancy-shmancy eDSL. After all, any programmer writing a server should be familiar with `http-types`, `warp` and `wai`, as they form a minimalist yet robust implementation of an HTTP server. This library adds some functionality onto these packages for convenience in writing a SaaS, but it still requires the programmer to understand these basics. In other words: nothing should seem "magic."
+HTTP servers are alredy simple; if we try to further simplify them, we just end-up complicating things. Thus I'm not a fan of most Haskell web frameworks, with their unique eDSLs and monad transformer stacks that obscure the inner workings of the server and require time to learn, but are supposed to make for "prettier code." A pretty veneer around an ugly mess is not pretty.
 
-I'm not a fan of the "scaffolding" or "plugin" design of most web frameworks, with their unique eDSLs and monad transformer stacks that obscure the inner workings of the server and require time to learn. HTTP servers are alredy simple; if we try to further simplify them, we just end-up introducing complicating fluff.
+Server Box does not assume anything around the server you're using it to implement. Thus the routing mechanism is entirely general: it's just as easy to route by time of day, or by query parameters, as it is to route by HTTP method or relative path. There's no special JSON/REST support; that's your responsibility, and you don't need any help; `aeson` is already very easy to use and capable. Or if you're a forward thinker, you could even use `yaml` instead. If you think this generality too cumbersome and annoying, consider:
 
-Also the server box aims to be nothing more than a server. The encapsulation and safety of types is wholy the responsibility of the programmer. (see *Resources* below)
+* route by method and path: `rte m paths = onMethod (==m) >>> routeByPath paths`
+* example routing by method and dynamic paths: `rte m = onMethod (==m) >>^ pathInfo >>^ (\case ["wiki", readMaybe @Int -> articleNum] -> fetchWiki articleNum; _ -> ⋯)`
 
-That being said, the server box certainly isn't for everyone. It's much more about staying productive at a low-level, rather than an easy-to-use, pretty framework that fits together like puzzle pieces. In fact, it encourages considering what all an HTTP server *can* be (as long as it conforms to the spec) rather than what it *should* be&mdash;I'm talking such silly things as routing based not on URL, but on request headers. #GoNutsAndLiveDangerously
+As these functions are so easily defined, yet are not certain to be used, I see no reason to define them in the `ServerBox` module. If you were authoring the [C2 wiki](http://wiki.c2.com/), then it'd be presumptuous to suggest routing by path, for example, since they route by query parameters.
+
+## Personal Library
+
+Currently I'm the only person who's worked on this library. I am not myself a professional web developer, and I don't work at a company; I work alone (by default, not by choice; I'm open to collab!) Anyway, please note that although I design this library for speed and safety, I have only my own personal needs on which to base the server box's design; expect it to lack some features! I'm not intimate with web standards nor needs of professional web developers or other people involved in the web dev production chain. If you want a feature added, please open an issue or send a PR.
+
+For example, one of the first things I did in creating a server framework was supporting HTTPS; I turned to *Let's Encrypt*'s *webroot* plugin. I found a blog article showing how to use it in Haskell with warp, and it worked! Yay. What more do I need? It works. The code is just a few lines. Later I found that snoyberg [already has a Let's Encrypt warp plugin](https://github.com/snoyberg/warp-letsencrypt). I read the code, and I confidently assume that it's good code, but I don't understand its complexities, because my strategy for learning Let's Encrypt was "let's just get this working as fast as possible." I didn't even consider that someone had released code for webroot, because I didn't think there was that much code to be written for it! (See [my implementation of webroot](https://github.com/nick-chandoke/nixys-server-box/blob/master/src/ServerBox/Plugins/Webroot.hs) for contrast.)
+
+So just be aware: the server box is currently designed to be nothing more than a robust HTTP server: no extra features nor frills!
 
 ## Resources
 
-Becasue the server box is minimalist, if you're looking to use it as a web framework, you'll want to use some more packgages. Here are my recommendations:
+Because the server box is minimalist, if you're looking to use it as a web framework, you'll want to use some more packages. I recommend
 
 * [`data-manip`](https://github.com/nick-chandoke/data-manip) for working with and generating HTML
-* <s>[`beam`](https://tathougies.github.io/beam/) for databases</s> wow I couldn't get that thing working. bad.
-
-## Not for Production Use
-
-I'm not intimate with web standards or needs of professional web developers. Thus I assume that everything's simple, and I write &amp; design naïvely, for the small-scale projects that I work on. For example, one of the first things I did in creating a server framework was supporting HTTPS; I turned to *Let's Encrypt*'s *webroot* plugin. I found a blog article showing how to use it in Haskell with warp, and it worked! Yay. What more do I need? It works. The code is just a few lines. Later I found that snoyberg [already has a Let's Encrypt warp plugin](https://github.com/snoyberg/warp-letsencrypt). I read the code, and I confidently assume that it's good code, but I don't understand its complexities. I didn't even consider that someone had released code for webroot, because I didn't think there was that much code to be written for it! (See [my implementation of webroot](https://github.com/nick-chandoke/nixys-server-box/blob/master/src/ServerBox/Plugins/Webroot.hs) for contrast.)
-
-## Markup Design Concepts (Experimental)
-
-*Originally I wrote HTML functionality into this library, but I've since considered HTML as just another data format, and have moved that funcionality to my `data-manip` library. Thus this section still applies to HTML, and thus web design, but perhaps it's out-of-place here.*
-
-tl;dr: WYSIWYG bad, WYSIWYM (What You See Is What You Mean) good. Prefer TEX over ODT. Use graph editors for graphs, table editors for tables, etc. Let them be converted to HTML automatically only.
-
-### Semantics, not Magazines
-
-One of my general interests as a programmer is finding the most elegant expressions for data definition and manipulation. One example is that nobody wants to write HTML by hand. We have Markdown for blog-like markup, but even in general, we encode information in more specific formats: spreadsheets, graphs, music, equations,...and each has its own editor, because each is a different concept. What concept does HTML represent? None; it's too general. Thus it should never be edited manually &ndash; only produced by some data conversion program, for consumption by browsers. There's no reason to keep an HTML version anywhere but a cache that nobody manually touches.
-
-Secondly, there are only so many common structures: mostly tables, lists, sets, trees, graphs. Maybe it's daring, but I assume that one needs to create only so many general elegant catamorphisms about these few structures in order to create a solid document-to-markup framework that works fine in the grand majority of use cases.
-
-### Templating and Auto-Design
-
-**TODO**: move to some other place. This is about webpages, not servers. Furthermore, better-than-www should be discussed as well.
-
-Have you used [graphviz](https://graphviz.gitlab.io/about/)? The way it works to automatically elegantly arrange graphs is really cool; it uses a concept of potential energy. Anyway, why don't we automatically arrange HTML, too? There aren't many HTML designs: we have list-based things &ndash; navbars, \<ol\>, \<ul\> &ndash;  either vertical or horizontal, hidden or not, on the top, left, right, or bottom of a screen. We have main content, a header and a footer. And of course, some common markdown-supported elements like \<p\>. And of course, we can arbitrarily compose/nest sets or sequences of all these elements. That's the grand majority of webpage content. Why are we needing to layout this stuff by-hand? Let's be honest, folks: we're all basically doing the same webpage design. That's just a testament to the fact that there exists a design that maximizes readability & engagement together. Web design isn't an art project; it can (and *should*) be calculated, given a set of objects and constraints. Semantic web elements, and accessibility, should come built-in, for starters.
-
-**Web design is a science at least as much as it is an art.**
-
-By the way, if you suggest that WYSIWYG HTML editors are good, I ask if you've been to the [CSS Zen Garden](http://csszengarden.com/).
+* <s>[`beam`](https://tathougies.github.io/beam/) for databases</s> wow I couldn't get that thing working. bad. tutorial makes it look good, but actually *using* it is another story!
+    * perhaps [persistent](https://www.stackage.org/lts-14.4/package/persistent-2.9.2) + [esqueleto](https://www.stackage.org/lts-14.4/package/esqueleto-3.0.0). see <https://www.yesodweb.com/book-1.6/sql-joins>, too.

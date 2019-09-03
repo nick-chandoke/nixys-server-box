@@ -1,12 +1,15 @@
+-- these routes follow an iteratee pattern: stop | continue | error. Thus, can I compose routes via (>->) or (.|)? All iteratees are, at heart, foldl'. Frankly, I think it's time to create a language which compiles to Haskell using Conduit almost exclusively; this language will be still based on the lambda calculus, but with structural typing and few functions that can be written.
+-- consider creating conduit arrows or using conduit for everything instead of arrows. maybe create framework merging [http-conduit](https://www.stackage.org/haddock/nightly-2019-09-01/http-conduit-2.3.7.1/Network-HTTP-Client-Conduit.html) and routing and transforms (in data-manip)
 -- TODO: learn how to use HTTP/2-specific functions in Network.Wai.Handler.Warp? To what extent are these used automatically or are not so useful?
 -- | Run a warp server, and routing types & methods
 module ServerBox
 ( -- * Types
-  RouteArr(..)
-, Route
+  Route
+, RouteArr(..)
 , RouteFlag(Next, Short)
 -- * Common Arrows
 , constA
+, arrK
 , guardA
 , guardAM
 , guardMA
@@ -16,6 +19,9 @@ module ServerBox
 , orShortM
 , next
 , short
+-- * Non-Arrow Response Generators
+, responseProcess
+, download
 -- ** Routing
 , routeByPath
 , onMethod
@@ -33,7 +39,11 @@ module ServerBox
 -- * Sites
 , static
 , staticOn
--- , vput
+, vput
+-- * Re-Exports
+, module Network.HTTP.Types
+, module Network.Wai
+, module Network.Wai.Handler.Warp
 ) where
 
 -- base
@@ -46,26 +56,31 @@ import Data.Bool (bool)
 import Data.Maybe (fromMaybe)
 import Data.Bitraversable (bitraverse)
 import Data.Functor.Compose
-import Prelude hiding (FilePath, (.), id)
+import RIO hiding (FilePath, (.), id, local)
 
 -- rio (and deps)
-import Data.ByteString.Builder (Builder, toLazyByteString, charUtf8)
+import Data.ByteString.Builder (Builder, toLazyByteString, byteString, charUtf8)
+import Data.ByteString.Builder.Extra (defaultChunkSize)
 import Data.Foldable (foldl')
-import RIO.ByteString (ByteString)
+import RIO.ByteString (ByteString, hGetSome)
 import RIO.ByteString.Lazy (toStrict, fromStrict)
 import RIO.Text (Text)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
+import qualified Data.ByteString.Lazy as LBS
 import qualified RIO.Map as M
 import qualified RIO.Text as T
 
--- import Data.Vault.Lazy hiding (empty)
+import Data.Vault.Lazy hiding (empty, lookup)
 import System.FilePath (pathSeparator) -- filepath
 import Data.Streaming.Network.Internal (HostPreference (Host)) -- streaming-commons
-import Network.HTTP.Types (Method, hLocation, methodNotAllowed405, movedPermanently301, methodGet, ok200) -- http-types
-import Network.Wai (Middleware, Request(..), Response, Application, rawPathInfo, requestMethod, pathInfo, responseLBS, responseFile) -- wai
-import Network.Wai.Handler.Warp (run, runSettings, Settings, setServerName, defaultSettings, setHost, setTimeout, setProxyProtocolNone, setPort, getPort, Port) -- warp
+import Network.HTTP.Types -- http-types
+import Network.Wai -- wai
+import Network.Wai.Handler.Warp -- warp
 import Network.Wai.Handler.WarpTLS (runTLS, TLSSettings) -- warp-tls
-import qualified Data.Trie as Trie -- bytestring-trie
+
+-- bytestring-trie
+import qualified Data.Trie as Trie
 import Data.Trie (Trie)
 
 -- wai-extra
@@ -74,19 +89,29 @@ import Network.Wai.Middleware.ForceSSL (forceSSL)
 import Network.Wai.Middleware.ForceDomain (forceDomain)
 import Network.Wai.Middleware.Local (local)
 
-{- | Routes may either fail with a response ('short',) or fail such that they try another route ('next'.) If a route fails with a response, then the computation short circuits immediately; (other failures that may have occured had the failure not been there) will occur once that failure is fixed. In other words, RouteArr does not yet support Validations-style error collecting. Obviously, this is under consideration and may be added in a later release.
+import System.Process.Typed
+import Conduit
+import Data.Conduit.Process.Typed
+-- import Network.Wai.Conduit
+
+wrap :: Applicative f => g a -> Compose f g a
+wrap = Compose . pure
+{-# INLINE wrap #-}
+
+{- | Routing is done by simple if-then-else predicates, implemented using 'ArrowPlus'. Routes may exit their computation early to return a 'Response'. You may attach a monadic callback action to any route. Callback actions are executed right before a response is sent, and they're executed in the order of their corresponding routes.
 
 === Example
 
 @
+import ServerBox
 import Network.Socket (SockAddr(..)) -- in the package called "network"
 let route1 =  'onPath' (=="\/path1") >>>
-              ('onMethod' (==methodGet)  >>> constA (responseLBS ok200 [] "You're getting page 1!"))
-          <+> ('onMethod' (==methodPost) >>> constA (responseLBS ok200 [] "You're posting to page 1!"))
+              ('onMethod' (==methodGet) >>> constA (responseLBS ok200 [] "You're getting page 1!"))
+          \<+\> ('onMethod' (==methodPost) >>> constA (responseLBS ok200 [] "You're posting to page 1!"))
     guardIP = guardA -- return error response if not from a particular IP address
         (responseLBS forbidden403 [] "Banned IP address.")
         (\\(remoteHost -> SockAddrInet _ addr) -> addr `elem` bannedAddrs)
-    route2 = guardIP >>> static "/approot/filesystem/"
+    route2 = guardIP >>> static "\/approot\/filesystem\/"
 in 'stdwarp'
     Nothing -- no TLS; we're doing HTTP only
     (setPort 8080 stdSettings)
@@ -100,15 +125,17 @@ This translates to the following routing:
 1. If path is @/path1@, respond with a "getting" or "posting" response on the respective methods.
 2. If path is not @/path1@, or method is neither GET nor POST, then check if the IP address is banned; if so, return a response saying so; else serve files from the local filesystem.
 
+* Note in this particular example it may be more sensible to use 'setOnOpen' to ban connections.
+
 -}
-newtype RouteArr m a b = RouteArr { runRoute :: a -> Compose m RouteFlag b } deriving (Functor)
+newtype RouteArr m a b = RouteArr { runRoute :: a -> Compose m RouteFlag b } deriving Functor
 type Route m = RouteArr m Request Response
 
 data RouteFlag a
-    = Next -- ^ try the next route (implemented by @(<+>)@)
-    | Short Response -- ^ stop route computation and respond (implemented by @(.)@)
-    | Route a -- ^ usual routing (implemented by @(.)@)
-    deriving (Functor)
+    = Next -- ^ stop computation and try the next route
+    | Short !Response -- ^ stop computation and respond
+    | Route !a -- ^ usual routing
+    deriving Functor
 
 instance Applicative RouteFlag where
     pure = Route
@@ -126,12 +153,6 @@ instance Alternative RouteFlag where
     Next <|> x = x
     x <|> _ = x
 
--- currently unused. Should be used in the Category definiton below.
-instance Monad RouteFlag where
-    Route x >>= k = k x
-    Next >>= _ = Next
-    Short r >>= _ = Short r
-
 -- is there any way to define this using the monad instance for RouteFlag? Probably not.
 -- I'd need a function :: (Monad m, Monad n) => m (n a) -> (a -> m (n b)) -> m (n b)
 instance Monad m => Category (RouteArr m) where
@@ -146,7 +167,7 @@ instance Monad m => Arrow (RouteArr m) where
     RouteArr u *** RouteArr v = RouteArr $ \(b,d) -> liftA2 (,) (u b) (v d)
 
 -- these monoidal arrow instances do not use Compose's Alternative instance. This is mainly in the interest of IO's Alternative
--- being that anything not fail/mzero/empty is OK, which is not what we want! We want to jump inside the category
+-- being that anything not fail/mzero/empty is OK, which is not what we want! We want to jump inside the inner category, and perform (<|>) directly on RouteFlag!
 -- to check for Next!
 instance (Monad m) => ArrowZero (RouteArr m) where zeroArrow = RouteArr (const (Compose $ pure empty))
 instance (Monad m) => ArrowPlus (RouteArr m) where
@@ -162,26 +183,36 @@ instance Monad m => ArrowChoice (RouteArr m) where
 -- | How is this not already in @Control.Arrow@? Like, so common, right?
 constA :: Arrow a => c -> a b c
 constA = arr . const
+{-# INLINE constA #-}
+
+-- | RouteArr from a Kleisli
+arrK :: Applicative m => (b -> m c) -> RouteArr m b c
+arrK k = RouteArr (Compose . fmap pure . k)
+{-# INLINE arrK #-}
 
 -- | On unsatisfied predicate, either try next route or immediately return a response.
 --
 -- Note that you cannot use @guardA@ to return a response if that response is a function of the arrow's input! For that, you should use 'onShort'.
 guardA :: Monad m => RouteFlag b -> (b -> Bool) -> RouteArr m b b
-guardA f p = RouteArr (\x -> Compose . pure $ bool f (Route x) $ p x)
+guardA f p = RouteArr (\x -> wrap $ bool f (Route x) $ p x)
+{-# INLINE guardA #-}
 
 -- | 'guardA' that accepts a Kleisli predicate
 guardAM :: Monad m => RouteFlag b -> (b -> m Bool) -> RouteArr m b b
 guardAM f p = RouteArr (\x -> Compose $ bool f (Route x) <$> p x)
+{-# INLINE guardAM #-}
 
 -- | On @Nothing@, either try next route or immediately return a response.
 --
 -- Note that you cannot use @guardA@ to return a response if that response is a function of the arrow's input! For that, you should use 'onShort'.
 guardMA :: Monad m => RouteFlag c -> (b -> Maybe c) -> RouteArr m b c
-guardMA f p = RouteArr (Compose . pure . maybe f pure . p)
+guardMA f p = RouteArr (wrap . maybe f pure . p)
+{-# INLINE guardMA #-}
 
 -- | 'guardMA' that accepts a Kleisli
 guardMAM :: Monad m => RouteFlag c -> (b -> m (Maybe c)) -> RouteArr m b c
 guardMAM f p = RouteArr (Compose . fmap (maybe f pure) . p)
+{-# INLINE guardMAM #-}
 
 -- | Useful when introducing conditions that may cause shorting
 boolE :: a -- ^ value to return on False, in a Left
@@ -189,6 +220,7 @@ boolE :: a -- ^ value to return on False, in a Left
       -> Bool
       -> Either a b
 boolE a b c = if c then Right b else Left a
+{-# INLINE boolE #-}
 
 {- | Convenience function. Usually useful with 'boolE', e.g.
 
@@ -203,20 +235,43 @@ orShort $ \req ->
 
 -}
 orShort :: Applicative m => (b -> Either Response c) -> RouteArr m b c
-orShort f = RouteArr (Compose . pure . (Short ||| Route) . f)
+orShort f = RouteArr (wrap . (Short ||| Route) . f)
+{-# INLINE orShort #-}
 
-orShortM :: Functor m => (b -> m (Either Response c)) -> RouteArr m b c
+-- | 'orShort' for Kleislis
+orShortM :: Applicative m => (b -> m (Either Response c)) -> RouteArr m b c
 orShortM f = RouteArr (Compose . fmap (Short ||| Route) . f)
+{-# INLINE orShortM #-}
+
+-- TODO: how to write so that user can configure their process interaction appropriately, e.g. if stdin was set to createPipe, and they wanted to close that pipe within their handler? What's the appropriate generality of signature?
+    -- what about letting the user choose whether to check the exit code or not?
+
+-- I couldn't figure-out how to construct a conduit from the send and flush functions more easily than this convoluted way.
+-- | Stream output from a typed process.
+responseProcess :: Status -> ResponseHeaders -> ProcessConfig stdin stdout stderr -> Response
+responseProcess s hs cfg = responseStream s hs $ \send flush ->
+    withProcessWait_ (setStdout createPipe cfg) $ \p@(getStdout -> h) ->
+        let loop = do
+            bs <- hGetSome h defaultChunkSize
+            unless (BS.null bs) (send (byteString bs) *> flush *> loop)
+        in loop *> hClose h
+{-# INLINE responseProcess #-}
+
+-- | Tell the browser/client to download the HTTP response with a given file name
+download :: ByteString -> Header
+download n = ("Content-Disposition", "attachment; filename=\"" <> n <> "\"")
+{-# INLINE download #-}
 
 -- | 'Next' as an arrow. Seemingly is accounted for entirely by guardA(M) already, but just in case not, I'm leaving it here.
 next :: Applicative m => RouteArr m a b
-next = RouteArr (\_ -> Compose (pure Next))
+next = RouteArr (\_ -> wrap Next)
+{-# INLINE next #-}
 
 -- | 'Short' as an arrow. Seemingly is accounted for entirely by orShort(M) already, but just in case not, I'm leaving it here.
 short :: Applicative m => RouteArr m Response b -- yes, this type signature is correct, as odd as it looks.
-short = RouteArr (Compose . pure . Short)
+short = RouteArr (wrap . Short)
+{-# INLINE short #-}
 
--- | Note that, by definition of 'Application', the route you provide here must be in ^IO@. Seeing as @routeToApp@ will always be the last step in preparing a route, that should be OK.
 routeToApp :: Response -- ^ returned when the route given evaluates to "try next route"
            -> Route IO -- ^ route to convert
            -> Application
@@ -224,6 +279,7 @@ routeToApp defaultResp (RouteArr a) = \req resp -> getCompose (a req) >>= \case
     Route r -> resp r
     Short r -> resp r
     Next -> resp defaultResp
+{-# INLINE routeToApp #-}
 
 -- | Run a warp server on 80 and 443 by default, forcing TLS for all connections if you provide @Just@ a @TLSSettings@. See 'Route' for an example of running stdwarp.
 --
@@ -244,6 +300,7 @@ stdwarp mtls s mw dr r = void $ case mtls of
     Just (tls, sec_port) -> do
         void . forkIO . run (getPort s) . forceSSL $ const ($ responseLBS ok200 [] "")
         runTLS tls (setPort sec_port s) . addHeaders [("Strict-Transport-Security", "max-age=31536000; includeSubdomains")] . mw $ routeToApp dr r
+{-# INLINE stdwarp #-}
 
 -- | Run a Route on localhost on http (allows same-host-only connections, but traffic is still plaintext! Other applications on the host computer can read that traffic!)
 --
@@ -260,6 +317,7 @@ stdwarpLocal lr s mw dr
     . addHeaders [("Access-Control-Allow-Origin", "null")] -- no-hassle AJAX
     . mw
     . routeToApp dr
+{-# INLINE stdwarpLocal #-}
 
 -- | 'defaultSettings' + 'setTimeout' 10. Also disables proxy protocol and sets empty @Server@ header.
 stdSettings :: Settings
@@ -268,16 +326,19 @@ stdSettings =
     . setProxyProtocolNone -- "Do not use the PROXY protocol." TODO: does this disable accessing the server via proxies?
     . setServerName mempty
     $ defaultSettings
+{-# INLINE stdSettings #-}
 
 stdHeaders :: [(ByteString, ByteString)]
 stdHeaders = [ ("X-Frame-Options", "deny")
              ]
+{-# INLINE stdHeaders #-}
 
 -- | Returns a 'Settings' modifier and 'Middleware' that together ...do something.... OK, it uses 'setHost' and 'forceDomain', and I'm not even quite sure what effect that has.
 --
 -- Also, for some reason the middleware returned here, along with 'forceSSL' in 'stdwarp''s port 80 handler, produces infinite redirect, even when connecting via https on 443, even if there's no forceSSL used on this line. So don't use the middleware returned from @setDomain@.
 setDomain :: String -> (Settings -> Settings, Middleware)
 setDomain d = (setHost (Host d), forceDomain $ let bseh = BSC.pack d in bool Nothing (Just bseh) . (==bseh))
+{-# INLINE setDomain #-}
 
 -- | Try successor route if a path predicate fails.
 --
@@ -287,6 +348,7 @@ setDomain d = (setHost (Host d), forceDomain $ let bseh = BSC.pack d in bool Not
 -- Note that the path is never null; it always either begins with, or entirely consists of, a forward-slash
 onPath :: Monad m => (ByteString -> Bool) -> RouteArr m Request Request
 onPath p = guardA Next (p . rawPathInfo)
+{-# INLINE onPath #-}
 
 -- | Modify a route so that it tries its successor route if a method predicate fails, returning 405 if the desired method is not the one in the request. Probably only use after @onPath@ or using pattern matching to identify a path.
 onMethod :: Monad m => (Method -> Bool) -> RouteArr m Request Request
@@ -302,7 +364,7 @@ getQuery attr = arr (maybe (Left undefined) Right . lookup attr . queryString) >
 -- | Host a static site where pages are predictably named and stored on a 3rd party server, e.g. S3 or BackBlaze, or some CDN. I'm going to assume it's a CDN. So, @staticOn@ 301-redirects to the "translated" location on the CDN.
 --
 -- For example, to serve on an AWS S3-compatible CDN, one may do
--- @let cdn = (\\p -\> "https:\/\/mybucket.somecdn.com" \<\> p) in staticOn@, which, would redirect, /e.g./ "\/\/mysite.com\/path1" to "https:\/\/mybucket.somecdn.com\/path1". *Note that the static URL does not end with a slash.* This doesn't always need to be the case, but you must always consider that the path being transformed (the @p@ lambda variable, in this example) /does/ begin with a leading slash!
+-- @let cdn = (\\p -\> "https:\/\/mybucket.somecdn.com" \<\> p) in staticOn@, which, would redirect, /e.g./ "\/\/mysite.com\/path1" to "https:\/\/mybucket.somecdn.com\/path1". __Note that the static URL does not end with a slash.__ This doesn't always need to be the case, but you must always consider that the path being transformed (the @p@ lambda variable, in this example) /does/ begin with a leading slash!
 --
 -- === Suggestions
 --
@@ -311,6 +373,7 @@ getQuery attr = arr (maybe (Left undefined) Right . lookup attr . queryString) >
 -- * if you really are using a CDN to host all your (non-dynamically-generated) webpages (like you /should/,) then be sure to <https://support.google.com/webmasters/answer/139394?hl=en let search engines know that the pages are really yours>, rather than you just linking to someone else's page! Also, set access to /Public/ in your DigitalOcean spaces dashboard!
 staticOn :: Monad m => (ByteString -> ByteString) -> Route m
 staticOn f = arr (\req -> responseLBS movedPermanently301 [(hLocation, f $ rawPathInfo req)] mempty)
+{-# INLINE staticOn #-}
 
 -- | Load a local file from the requested path, relative to a root path, on the local filesystem.
 -- Only triggers if method is GET.
@@ -321,13 +384,14 @@ static root = onMethod (==methodGet)
            >>^ (\req -> responseFile ok200 [] (root <> T.unpack (T.intercalate (T.singleton pathSeparator) (pathInfo req))) Nothing) -- responseFile automatically returns 404 if file not found, despite the ok200 here. Below is code that guards against accessing ancestors of the root. It's currently unused b/c it seems that warp already accounts for that. However, just in case, I'm leaving it here.
 -- aboveRoot = isNothing $ foldl' (\mb a -> mb >>= \b -> let b' = b + (case a of ".." -> (-1); "." -> 0; _ -> 1) in if b' < 0 then Nothing else Just b') (Just 0) (pathInfo req)
 -- when aboveRoot (short $ responseLBS forbidden403 [] "Requested path is ancestor of server's root directory!")
+{-# INLINE static #-}
 
--- | The most common way to route: by URL. This uses a trie for efficient storage and fast lookup. Namely, composing routes by @(\<\>)@\/@(\<|\>)@ is linearly complex, but routing on paths via a trie is probably of a logarithmic order.
+-- | The most common way to route: by URL. This uses a trie for efficient storage and fast lookup. Namely, composing routes by @(\<+\>)@ is linearly complex, but routing on paths via a trie is probably of a logarithmic order.
 --
 -- === The Trie
 --
 -- * All items in the trie represent absolute URLs. None should lead nor end with a slash, since that'd be redundant. These are necessary preconditions.
--- * *It is recommended to 'normalize' your @Request@ before using @routeByPath@.*
+-- * __It is recommended to 'normalize' your @Request@ before using @routeByPath@.__
 --
 -- Note that this only works on completely non-abstract URL paths; no variables are allowed in the URL, as the trie works on @ByteString@ only. Thus in order to use parameterized URLs, use query parameters rather than variable path segments. I know that's not commonly done, so if that's bad practice (other than "it's bad because the W3C gods decreed that query is for non-hierarchical data and paths /are/ for such data"), please let me know.
 --
@@ -357,6 +421,7 @@ routeByPath t = arr (\req ->
 
 plainResponse :: Monad m => ByteString -> RouteArr m b Response
 plainResponse s = constA (responseLBS ok200 [] (fromStrict s))
+{-# INLINE plainResponse #-}
 
 -- TODO: override 'rawPathInfo' and not 'pathInfo' for speed.
 -- | A suggested request normalization function: removes trailing or multiple consecutive slashes, and nubs & sorts query parameters in lexiographic order by key.
@@ -368,9 +433,7 @@ normalize r =
       , queryString = M.toList . M.fromList $ queryString r
       }
 
-{-
 -- | Insert a value into a Vault, creating a new Key in the process; return the key and vault.
 -- because who ever creates a key without immediately using it to put in a value thereafter?
 vput :: a -> Vault -> IO (Key a, Vault)
 vput val vault = (\nk -> (nk, insert nk val vault)) <$> newKey
--}
